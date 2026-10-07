@@ -1,0 +1,61 @@
+{
+  "name": "@bynn/decisionnode",
+  "version": "0.1.0",
+  "description": "TypeScript and JavaScript client for the DecisionNode API: calibrated truth, choice and score answers with typed results.",
+  "license": "MIT",
+  "author": "Bynn Intelligence, Inc.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bynn-Intelligence/decision-node-node.git"
+  },
+  "homepage": "https://decisionnode.com",
+  "keywords": [
+    "decisionnode",
+    "decision",
+    "classification",
+    "scoring",
+    "probability",
+    "api",
+    "sdk"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20.16"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run test/unit",
+    "test:conformance": "vitest run test/conformance",
+    "test:all": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test/types"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
