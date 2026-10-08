@@ -4,14 +4,17 @@
  */
 import { Decision } from './answers.js';
 import {
+  BadRequestError,
   ConnectionError,
   DecisionNodeError,
   TimeoutError,
   errorFromResponse,
+  localError,
   retryAfterSeconds,
   type ErrorFields,
 } from './errors.js';
 import type { Questions } from './questions.js';
+import { heldNumber, type HeldLimits } from './checks.js';
 import { prepare, withImages, type Prepared } from './request.js';
 import { abortReason, type RawResponse, type Transport } from './transport.js';
 import type { ImageInput, ImagePlacer } from './uploads.js';
@@ -256,7 +259,13 @@ export interface BatchContext {
   transport: Transport;
   placer: ImagePlacer;
   model: string;
+  /** A model's published limits, when the client holds them. */
+  limits: (model?: string | null) => HeldLimits;
 }
+
+/** The longest `custom_id` the API documents. */
+const MAX_CUSTOM_ID_CHARS = 512;
+const MAX_LIST_LIMIT = 100;
 
 export interface RunBatchOptions {
   /** Milliseconds between polls, at least 10,000. Default 60,000. A longer `Retry-After` from the server wins. */
@@ -289,7 +298,7 @@ export class Batches {
    * anything is sent. Retried only on 429 and 529.
    */
   async create(requests: readonly BatchRequest[] = [], options: { signal?: AbortSignal } = {}): Promise<Batch> {
-    const lines = await this.#prepareLines(requests);
+    const lines = await this.#prepareLines(requests, true);
     const body = (await this.#placeLines(lines, options.signal)).join('');
     return this.#batchCall('POST', '/v1/batches', body, options.signal);
   }
@@ -299,8 +308,7 @@ export class Batches {
    * at most 10 MiB, in order. Returns the batch after the last call.
    */
   async add(batchId: string, requests: readonly BatchRequest[], options: { signal?: AbortSignal } = {}): Promise<Batch> {
-    const lines = await this.#prepareLines(requests);
-    if (lines.length === 0) throw new TypeError('add needs at least one request');
+    const lines = await this.#prepareLines(requests, false);
     return this.#addPrepared(batchId, lines, options.signal);
   }
 
@@ -361,6 +369,13 @@ export class Batches {
 
   /** The key's batches, newest first (`GET /v1/batches`). */
   async list(params: { offset?: number; limit?: number } = {}, options: { signal?: AbortSignal } = {}): Promise<BatchPage> {
+    const { offset, limit } = params;
+    if (offset !== undefined && offset !== null && (!Number.isInteger(offset) || offset < 0)) {
+      throw localError(BadRequestError, `Query parameter offset must be an integer of 0 or more, got ${String(offset)}.`);
+    }
+    if (limit !== undefined && limit !== null && (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT)) {
+      throw localError(BadRequestError, `Query parameter limit must be an integer from 1 to ${MAX_LIST_LIMIT}, got ${String(limit)}.`);
+    }
     const query = new URLSearchParams();
     if (params.offset !== undefined && params.offset !== null) query.set('offset', String(params.offset));
     if (params.limit !== undefined && params.limit !== null) query.set('limit', String(params.limit));
@@ -419,7 +434,7 @@ export class Batches {
       throw new RangeError(`timeout must be above 0 milliseconds, got ${String(timeout)}`);
     }
     const signal = options.signal;
-    const lines = await this.#prepareLines(requests);
+    const lines = await this.#prepareLines(requests, true);
     const draft = await this.create([], { signal });
     if (lines.length > 0) {
       try {
@@ -464,22 +479,46 @@ export class Batches {
     return new Batch(res.body);
   }
 
-  /** Every request checked before anything is sent: the argument shape, then the API's fixed rules. */
-  async #prepareLines(requests: readonly BatchRequest[]): Promise<Line[]> {
+  /**
+   * Every request checked before anything is sent: the argument shape, the
+   * `custom_id` rules (lines numbered from 1 within the call), an empty add,
+   * the limits the client holds for batches, then each line as a decide request.
+   */
+  async #prepareLines(requests: readonly BatchRequest[], allowEmpty: boolean): Promise<Line[]> {
     if (!Array.isArray(requests)) throw new TypeError('requests must be an array');
+    if (requests.length === 0 && !allowEmpty) throw localError(BadRequestError, 'The call holds no requests.');
+    const held = this.#ctx.limits().batch;
+    const batch = held !== null && typeof held === 'object' ? (held as Record<string, unknown>) : {};
+    const most = typeof batch.requests_per_batch === 'number' ? batch.requests_per_batch : null;
+    if (most !== null && requests.length > most) {
+      throw localError(BadRequestError, `The batch would hold ${requests.length} requests. The limit is ${most}.`);
+    }
+    const longest = heldNumber(batch, 'max_custom_id_chars', MAX_CUSTOM_ID_CHARS);
+    const seen = new Set<string>();
     const lines: Line[] = [];
     for (const [i, req] of requests.entries()) {
-      if (req === null || typeof req !== 'object') throw new TypeError(`request ${i} must be an object`);
-      if (typeof req.customId !== 'string' || req.customId === '') {
-        throw new TypeError(`request ${i} needs a customId`);
+      const n = i + 1;
+      if (req === null || typeof req !== 'object') throw new TypeError(`request ${n} must be an object`);
+      const id: unknown = req.customId;
+      if (id === undefined || id === null) throw localError(BadRequestError, `Line ${n} has no custom_id.`);
+      if (typeof id !== 'string' || id.length < 1 || id.length > longest) {
+        throw localError(BadRequestError, `Line ${n}: custom_id must be a string of 1 to ${longest} characters.`);
       }
+      if (seen.has(id)) {
+        const shown = JSON.stringify(id);
+        throw localError(BadRequestError, `Line ${n}: custom_id ${shown.length <= 64 ? shown : `${shown.slice(0, 64)}...`} is already in the batch.`);
+      }
+      seen.add(id);
+    }
+    for (const req of requests) {
+      const model = req.model || this.#ctx.model;
       const fields = {
         custom_id: req.customId,
-        model: req.model || this.#ctx.model,
+        model,
         state: req.state === undefined || req.state === null ? '' : req.state,
         questions: req.questions,
       };
-      lines.push({ prepared: await prepare(this.#ctx.placer, fields, req.images) });
+      lines.push({ prepared: await prepare(this.#ctx.placer, fields, req.images, 'decide', this.#ctx.limits(model)) });
     }
     return lines;
   }

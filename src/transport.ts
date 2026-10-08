@@ -19,6 +19,9 @@ const MAX_BACKOFF_SECONDS = 8;
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
+/** The time in epoch milliseconds that upload URLs and cached uploads are judged by. */
+export type ClockFn = () => number | Promise<number>;
+
 /** Waits `ms` milliseconds, or rejects when `signal` aborts. */
 export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 
@@ -61,6 +64,7 @@ export interface TransportOptions {
   fetch: FetchLike | undefined;
   logger: ((line: string) => void) | undefined;
   sleep: SleepFn;
+  clock?: ClockFn;
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -215,6 +219,7 @@ export class Transport {
   readonly timeout: number;
   readonly maxRetries: number;
   readonly sleep: SleepFn;
+  readonly #clock: ClockFn;
   readonly #apiKey: string | undefined;
   /** The client's custom headers, names lower-cased. */
   readonly customHeaders: Record<string, string>;
@@ -228,6 +233,7 @@ export class Transport {
     this.timeout = options.timeout;
     this.maxRetries = options.maxRetries;
     this.sleep = options.sleep;
+    this.#clock = options.clock ?? Date.now;
     this.#apiKey = options.apiKey;
     this.#fetch = options.fetch;
     this.#logger = options.logger;
@@ -239,6 +245,11 @@ export class Transport {
       accept: 'application/json',
       ...this.customHeaders,
     };
+  }
+
+  /** The client's clock, in epoch milliseconds. */
+  async now(): Promise<number> {
+    return this.#clock();
   }
 
   /** The key, or an `AuthenticationError` when none is configured. */

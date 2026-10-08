@@ -3,7 +3,7 @@
  * then the body serialised once, so a request the API would refuse is refused
  * here with nothing sent. Images are placed later, per send.
  */
-import { checkQuestions } from './checks.js';
+import { checkRequest, type HeldLimits, type Profile } from './checks.js';
 import { serialise } from './transport.js';
 import type { ImagePlacer, ImageInput, ImagePlan } from './uploads.js';
 import type { WireImage } from './image.js';
@@ -30,9 +30,14 @@ export async function prepare(
   placer: ImagePlacer,
   fields: Record<string, unknown>,
   images: readonly ImageInput[] | null | undefined,
+  profile: Profile = 'decide',
+  limits: HeldLimits = {},
 ): Promise<Prepared> {
-  checkQuestions(checkQuestionMap(fields.questions));
-  const plan = await placer.check(images);
+  checkQuestionMap(fields.questions);
+  // The images count toward the nesting limit as the objects they will be.
+  const probe = Array.isArray(images) && images.length > 0 ? { ...fields, images: images.map(() => ({ id: '' })) } : fields;
+  checkRequest(probe, profile, limits);
+  const plan = await placer.check(images, limits);
   return { head: serialise(fields), plan };
 }
 

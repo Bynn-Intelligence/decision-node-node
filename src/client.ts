@@ -10,7 +10,7 @@ import {
   type DecisionResult,
 } from './answers.js';
 import { Batches, type BatchRequest, type BatchRun, type RunBatchOptions } from './batches.js';
-import { checkQuestions } from './checks.js';
+import { checkRequest, checkSessionOpen, type HeldLimits } from './checks.js';
 import { BadRequestError, DecisionNodeError, ServerError } from './errors.js';
 import { Image } from './image.js';
 import { choice, number as numberQuestion, score as scoreQuestion, truth, type Questions } from './questions.js';
@@ -32,6 +32,7 @@ import {
   readEnv,
   serialise,
   sleep,
+  type ClockFn,
   type FetchLike,
   type RawResponse,
   type SleepFn,
@@ -39,7 +40,7 @@ import {
 import { DEFAULT_INLINE_THRESHOLD, ImagePlacer, STALE_UPLOAD, type ImageInput } from './uploads.js';
 
 export { DEFAULT_INLINE_THRESHOLD };
-export type { FetchLike, ImageInput, SleepFn };
+export type { ClockFn, FetchLike, ImageInput, SleepFn };
 
 export const DEFAULT_BASE_URL = 'https://api.decisionnode.com';
 export const DEFAULT_MODEL = 'decisionnode-latest';
@@ -101,6 +102,12 @@ export interface ClientOptions {
    * record the waits instead of sleeping.
    */
   sleep?: SleepFn;
+  /**
+   * The time, in epoch milliseconds, that upload URLs and cached uploads are
+   * judged by. Default: `Date.now`. Tests can pass their own, synchronous or
+   * returning a promise.
+   */
+  clock?: ClockFn;
   /**
    * Receives one line per attempt: method, path, status, request id and time.
    * Never the state, questions or key. Off by default.
@@ -241,6 +248,8 @@ export class DecisionNode {
   readonly batches: Batches;
   readonly #transport: Transport;
   readonly #placer: ImagePlacer;
+  /** Each model's `/v1/models` entry, once `models()` has been called: limits only that list states. */
+  #held = new Map<string, Record<string, unknown>>();
 
   constructor(options: ClientOptions = {}) {
     // An empty string is "not given": the environment, then the default, applies.
@@ -283,9 +292,15 @@ export class DecisionNode {
       fetch: options.fetch ?? undefined,
       logger: options.logger,
       sleep: options.sleep ?? sleep,
+      clock: options.clock ?? undefined,
     });
     this.#placer = new ImagePlacer(this.#transport, inlineThreshold);
-    this.batches = new Batches({ transport: this.#transport, placer: this.#placer, model: this.model });
+    this.batches = new Batches({
+      transport: this.#transport,
+      placer: this.#placer,
+      model: this.model,
+      limits: (model) => this.#limits(model),
+    });
   }
 
   /** One decision: sends `POST /v1/decide` and returns typed answers. */
@@ -326,7 +341,7 @@ export class DecisionNode {
       state: params.state === undefined || params.state === null ? '' : params.state,
       questions: transform ? transform(questions) : questions,
     };
-    return prepare(this.#placer, fields, params.images);
+    return prepare(this.#placer, fields, params.images, transform ? 'systemone' : 'decide', this.#limits(fields.model));
   }
 
   /**
@@ -512,8 +527,12 @@ export class DecisionNode {
   /** The models your key may use, with their published limits (`GET /v1/models`). */
   async models(options: RequestOptions = {}): Promise<ModelInfo[]> {
     const { body } = await this.#transport.json({ method: 'GET', path: '/v1/models', signal: options.signal });
-    const list = Array.isArray(body.models) ? body.models : [];
-    return list.map((m) => new ModelInfo((m ?? {}) as Record<string, unknown>));
+    const list = (Array.isArray(body.models) ? body.models : []).filter(
+      (m): m is Record<string, unknown> => m !== null && typeof m === 'object' && !Array.isArray(m),
+    );
+    // Held for the local checks: a limit only this list states is checked once it is known.
+    this.#held = new Map(list.filter((m) => typeof m.name === 'string').map((m) => [m.name as string, m]));
+    return list.map((m) => new ModelInfo(m));
   }
 
   /**
@@ -529,7 +548,7 @@ export class DecisionNode {
         throw new TypeError('upload takes images of local bytes: a path, bytes or base64');
       }
     }
-    const plan = await this.#placer.check(images);
+    const plan = await this.#placer.check(images, this.#limits());
     if (plan === null) return [];
     const locals = plan.slots.flatMap((s) => ('local' in s ? [s.local] : []));
     return this.#placer.upload(locals, options.signal);
@@ -544,13 +563,13 @@ export class DecisionNode {
   async openSession(params: SessionParams, options: RequestOptions = {}): Promise<Session> {
     if (params === null || typeof params !== 'object') throw new TypeError('openSession takes an object with questions');
     const questions = checkQuestionMap(params.questions);
-    checkQuestions(questions);
     const body: Record<string, unknown> = { model: params.model || this.model };
     if (params.instructions !== undefined && params.instructions !== null) body.instructions = params.instructions;
     if (params.state !== undefined && params.state !== null) body.state = params.state;
     body.questions = questions;
     if (params.window !== undefined && params.window !== null) body.window = params.window;
     if (params.ttlSeconds !== undefined && params.ttlSeconds !== null) body.ttl_seconds = params.ttlSeconds;
+    checkSessionOpen(body, this.#limits(body.model as string));
     const { body: raw } = await this.#transport.json({
       method: 'POST',
       path: '/v1/sessions',
@@ -558,7 +577,7 @@ export class DecisionNode {
       policy: 'session_open',
       signal: options.signal,
     });
-    return new Session({ transport: this.#transport, placer: this.#placer }, raw);
+    return new Session({ transport: this.#transport, placer: this.#placer, limits: (model) => this.#limits(model) }, raw);
   }
 
   /**
@@ -573,7 +592,7 @@ export class DecisionNode {
     options: SuperviseOptions = {},
   ): Promise<SessionClosed | null> {
     if (body === null || typeof body !== 'object') throw new TypeError('supervise takes the session body as an object');
-    checkQuestions(checkQuestionMap(body.questions));
+    checkRequest({ questions: checkQuestionMap(body.questions) }, 'decide', this.#limits(body.model ?? undefined));
     return runSupervise(
       () => this.openSession(body, { signal: options.signal }),
       feed,
@@ -589,6 +608,13 @@ export class DecisionNode {
    */
   async runBatch(requests: readonly BatchRequest[], options: RunBatchOptions = {}): Promise<BatchRun> {
     return this.batches.run(requests, options);
+  }
+
+  /** The `/v1/models` entry of a model, when this client holds it, for the local checks. */
+  #limits(model?: string | null): HeldLimits {
+    const name = model || this.model;
+    const entry = this.#held.get(name);
+    return entry ? { ...entry, model: name } : {};
   }
 
   /**

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { BadRequestError, DecisionNode, Image, MAX_IMAGE_BYTES, imageDimensions, sniffMediaType, truth } from '../../src/index.js';
-import { fromBase64, toBase64 } from '../../src/image.js';
+import { fromBase64, isBlockedAddress, toBase64 } from '../../src/image.js';
 import { OK_TRUTH, fakeFetch } from './helpers.js';
 
 const FIXTURES = fileURLToPath(new URL('../fixtures/images/', import.meta.url));
@@ -99,9 +99,17 @@ describe('local image checks', () => {
     ['an unreadable header', [Image.fromBytes('t', fixture('5x3.png').slice(0, 20))], /header cannot be read/],
     ['base64 that is not', [Image.fromBase64('b', '***')], /not valid base64/],
     ['a plain http URL', [Image.fromUrl('u', 'http://example.com/a.jpg')], /only https URLs/],
-    ['a URL over 2,048 characters', [Image.fromUrl('u', `https://example.com/${'a'.repeat(2048)}`)], /only https URLs/],
+    ['a URL over 2,048 characters', [Image.fromUrl('u', `https://example.com/${'a'.repeat(2048)}`)], /over the limit of 2048/],
+    ['a URL with user information', [Image.fromUrl('u', 'https://user:pw@example.com/a.jpg')], /user information/],
+    ['a URL on another port', [Image.fromUrl('u', 'https://example.com:8443/a.jpg')], /port other than 443/],
+    ['a private address', [Image.fromUrl('u', 'https://10.1.2.3/a.jpg')], /private address/],
+    ['the metadata address', [Image.fromUrl('u', 'https://169.254.169.254/a.jpg')], /private address/],
+    ['an IPv6 loopback', [Image.fromUrl('u', 'https://[::1]/a.jpg')], /private address/],
+    ['an IPv4-mapped private address', [Image.fromUrl('u', 'https://[::ffff:192.168.0.1]/a.jpg')], /private address/],
+    ['a NAT64 loopback', [Image.fromUrl('u', 'https://[64:ff9b::7f00:1]/a.jpg')], /private address/],
+    ['an upload reference of another type', [Image.fromUploadId('r', 'upl_0', 'image/gif')], /media_type must be/],
     ['five images', Array.from({ length: 5 }, (_, i) => Image.fromUrl(`u${i}`, 'https://example.com/a.jpg')), /at most 4 images/],
-    ['repeated ids', [Image.fromUrl('a', 'https://example.com/1.jpg'), Image.fromUrl('a', 'https://example.com/2.jpg')], /unique/],
+    ['repeated ids', [Image.fromUrl('a', 'https://example.com/1.jpg'), Image.fromUrl('a', 'https://example.com/2.jpg')], /Duplicate image id/],
   ])('refuses %s with BadRequestError and sends nothing', async (_name, images, message) => {
     const { err, calls } = await decideWith(images);
     expect(err).toBeInstanceOf(BadRequestError);
@@ -130,5 +138,14 @@ describe('local image checks', () => {
     const { dn, calls } = client();
     await dn.decide({ questions: { q: truth('?') }, images: [Image.fromUploadId('r', 'upl_0123', 'image/png')] });
     expect(JSON.parse(calls[0]!.body!).images).toEqual([{ id: 'r', upload_id: 'upl_0123', media_type: 'image/png' }]);
+  });
+});
+
+describe('blocked addresses', () => {
+  it('judges literal addresses only', () => {
+    for (const host of ['8.8.8.8', '[2606:4700::1111]', 'example.com', '[::ffff:8.8.8.8]', '172.32.0.1']) expect(isBlockedAddress(host)).toBe(false);
+    for (const host of ['127.0.0.1', '0.0.0.0', '100.64.0.1', '172.31.255.255', '[fe80::1]', '[fd00:ec2::254]', '[2001:db8::1]', '255.255.255.255']) {
+      expect(isBlockedAddress(host)).toBe(true);
+    }
   });
 });

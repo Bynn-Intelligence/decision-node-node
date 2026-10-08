@@ -9,6 +9,7 @@ export {
   type CheckParams,
   type ClassifyParams,
   type ClientOptions,
+  type ClockFn,
   type DecideManyOptions,
   type DecideParams,
   type FetchLike,

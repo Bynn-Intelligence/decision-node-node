@@ -202,7 +202,7 @@ export class Image {
   readonly uploadId: string | undefined;
   readonly #declared: string | undefined;
   readonly #base64: string | undefined;
-  #checked: Promise<LocalImage> | undefined;
+  #bytes: Promise<Uint8Array> | undefined;
 
   constructor(source: ImageSource) {
     if (source === null || typeof source !== 'object' || typeof source.id !== 'string') {
@@ -283,36 +283,32 @@ export class Image {
 
   /**
    * The bytes after the local checks: a known format matching any declared
-   * type, at most 10 MiB, at most 40 megapixels. A fault is a `BadRequestError`.
-   * Kept once checked when the SDK holds its own copy of the bytes.
+   * type, at most `maxBytes` (10 MiB unless the model publishes another), at
+   * most 40 megapixels. A fault is a `BadRequestError`. The decoded bytes are
+   * kept once read when the SDK holds its own copy of them.
    */
-  checkLocal(): Promise<LocalImage> {
+  async checkLocal(maxBytes: number = MAX_IMAGE_BYTES): Promise<LocalImage> {
     const owned = this.path !== undefined || this.#base64 !== undefined || isBlob(this.data);
-    if (owned && this.#checked) return this.#checked;
-    const checked = this.#check(owned);
+    let bytes: Promise<Uint8Array>;
     if (owned) {
-      this.#checked = checked;
-      // A failed check is not kept: the next call reports it again.
-      checked.catch(() => {
-        this.#checked = undefined;
-      });
+      this.#bytes ??= this.#read();
+      bytes = this.#bytes;
+    } else {
+      bytes = this.#read();
     }
-    return checked;
+    return checkImageBytes(this, await bytes, this.path === undefined ? this.#declared : undefined, owned, maxBytes);
   }
 
-  async #check(owned: boolean): Promise<LocalImage> {
-    let bytes: Uint8Array;
+  async #read(): Promise<Uint8Array> {
     if (this.#base64 !== undefined) {
       const decoded = fromBase64(this.#base64);
       if (decoded === null) throw localError(BadRequestError, `Image ${this.id}: the data is not valid base64.`);
-      bytes = decoded;
-    } else {
-      const data = this.data!;
-      if (data instanceof Uint8Array) bytes = data;
-      else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
-      else bytes = new Uint8Array(await data.arrayBuffer());
+      return decoded;
     }
-    return checkImageBytes(this, bytes, this.path === undefined ? this.#declared : undefined, owned);
+    const data = this.data!;
+    if (data instanceof Uint8Array) return data;
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    return new Uint8Array(await data.arrayBuffer());
   }
 
   /** The wire form of an image that is not local bytes. */
@@ -329,14 +325,14 @@ export class Image {
   }
 }
 
-function checkImageBytes(image: Image, bytes: Uint8Array, declared: string | undefined, owned: boolean): LocalImage {
+function checkImageBytes(image: Image, bytes: Uint8Array, declared: string | undefined, owned: boolean, maxBytes: number): LocalImage {
   const id = image.id;
   const found = sniffMediaType(bytes);
   if (found === null) throw localError(BadRequestError, `Image ${id} is not a JPEG, PNG or WebP image.`);
   if (declared !== undefined && declared !== found) {
     throw localError(BadRequestError, `Image ${id} could not be decoded as ${declared}.`);
   }
-  if (bytes.length > MAX_IMAGE_BYTES) throw localError(BadRequestError, `Image ${id} is larger than 10 MB.`);
+  if (bytes.length > maxBytes) throw localError(BadRequestError, `Image ${id} is larger than 10 MB.`);
   const dims = imageDimensions(bytes, found);
   if (dims === null) throw localError(BadRequestError, `Image ${id}: its header cannot be read.`);
   if (dims.width * dims.height > MAX_IMAGE_PIXELS) {
@@ -345,17 +341,89 @@ function checkImageBytes(image: Image, bytes: Uint8Array, declared: string | und
   return { id, bytes, mediaType: found, owned, image };
 }
 
-/** A `BadRequestError` unless the URL is `https` and at most 2,048 characters. */
-export function checkImageUrl(id: string, url: string): void {
-  let ok = url.length <= MAX_IMAGE_URL_CHARS;
-  if (ok) {
-    try {
-      ok = new URL(url).protocol === 'https:';
-    } catch {
-      ok = false;
+/** Address ranges an image URL may not name (private, loopback, link-local, metadata and other reserved ranges). */
+const BLOCKED_V4: Array<[string, number]> = [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
+  ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4], ['255.255.255.255', 32],
+];
+const BLOCKED_V6: Array<[string, number]> = [
+  ['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8], ['2001:db8::', 32], ['fd00:ec2::254', 128],
+];
+
+function parseV4(text: string): bigint | null {
+  const parts = text.split('.');
+  if (parts.length !== 4 || !parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)) return null;
+  return parts.reduce((acc, p) => (acc << 8n) | BigInt(p), 0n);
+}
+
+function parseV6(text: string): bigint | null {
+  let head = text;
+  let tail: bigint[] = [];
+  const v4 = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(text);
+  if (v4) {
+    const n = parseV4(v4[2]!);
+    if (n === null) return null;
+    head = v4[1]!.endsWith('::') ? v4[1]! : v4[1]!.slice(0, -1);
+    tail = [n >> 16n, n & 0xffffn];
+  }
+  const halves = head.split('::');
+  if (halves.length > 2) return null;
+  const group = (s: string) => (s === '' ? [] : s.split(':'));
+  const left = group(halves[0]!);
+  const right = halves.length === 2 ? group(halves[1]!) : [];
+  if (![...left, ...right].every((g) => /^[0-9a-f]{1,4}$/i.test(g))) return null;
+  const known = left.length + right.length + tail.length;
+  if (halves.length === 1 ? known !== 8 : known > 7) return null;
+  const words = [...left.map((g) => BigInt(`0x${g}`)), ...Array(8 - known).fill(0n), ...right.map((g) => BigInt(`0x${g}`)), ...tail];
+  return words.reduce((acc, w) => (acc << 16n) | w, 0n);
+}
+
+function inRange(addr: bigint, bits: number, base: bigint, prefix: number): boolean {
+  const shift = BigInt(bits - prefix);
+  return addr >> shift === base >> shift;
+}
+
+/** True when the host is a literal IP address in a blocked range; a DNS name is the server's to resolve. */
+export function isBlockedAddress(host: string): boolean {
+  const h = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  let v4 = parseV4(h);
+  if (v4 === null) {
+    const v6 = parseV6(h);
+    if (v6 === null) return false;
+    // IPv4-mapped (::ffff:0:0/96) and NAT64 (64:ff9b::/96) addresses are judged by the IPv4 address they embed.
+    if (v6 >> 32n === 0xffffn || v6 >> 32n === 0x64ff9b0000000000000000n) {
+      v4 = v6 & 0xffffffffn;
+    } else {
+      return BLOCKED_V6.some(([base, prefix]) => inRange(v6, 128, parseV6(base)!, prefix));
     }
   }
-  if (!ok) {
-    throw localError(BadRequestError, `Image ${id}: only https URLs of at most ${MAX_IMAGE_URL_CHARS} characters are accepted.`);
+  const a = v4;
+  return BLOCKED_V4.some(([base, prefix]) => inRange(a, 32, parseV4(base)!, prefix));
+}
+
+/**
+ * The URL rules that need no network: `https` (else `api_usage_error`), then
+ * `image_url_refused` for over 2,048 characters, user information, a port
+ * other than 443, no host, or a literal address in a blocked range.
+ */
+export function checkImageUrl(id: string, url: string): void {
+  if (typeof url !== 'string' || !/^https:\/\//i.test(url)) {
+    throw localError(BadRequestError, `Image ${id}: only https URLs are accepted.`);
   }
+  let reason: string | null = null;
+  const authority = /^https:\/\/([^/?#]*)/i.exec(url)![1]!;
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = null;
+  }
+  if (url.length > MAX_IMAGE_URL_CHARS) reason = `the URL is ${url.length} characters, over the limit of ${MAX_IMAGE_URL_CHARS}`;
+  else if (authority.includes('@')) reason = 'the URL carries user information';
+  else if (parsed === null) reason = 'the URL has no host';
+  else if (parsed.port !== '' && parsed.port !== '443') reason = 'the URL uses a port other than 443';
+  else if (parsed.hostname === '') reason = 'the URL has no host';
+  else if (isBlockedAddress(parsed.hostname)) reason = 'the URL resolves to a private address';
+  if (reason !== null) throw localError(BadRequestError, `Image '${id}': ${reason}.`, 'image_url_refused');
 }

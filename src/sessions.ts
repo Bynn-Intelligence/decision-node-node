@@ -5,6 +5,7 @@
  */
 import { parseAnswer, type Answer } from './answers.js';
 import { BadRequestError, DecisionNodeError, NotFoundError, TimeoutError, localError } from './errors.js';
+import { MAX_NESTING, MAX_SEQ, nestingDepth, type HeldLimits } from './checks.js';
 import { Image, type WireImage } from './image.js';
 import { USER_AGENT, isLoopbackHost, serialise, type Transport } from './transport.js';
 import type { ImagePlacer } from './uploads.js';
@@ -188,6 +189,8 @@ function webSocketClass(): Promise<WebSocketCtor> {
 export interface SessionContext {
   transport: Transport;
   placer: ImagePlacer;
+  /** A model's published limits, when the client holds them. */
+  limits: (model?: string | null) => HeldLimits;
 }
 
 /**
@@ -340,26 +343,20 @@ export class Session {
    */
   send(frame: Frame = {}): Promise<number> {
     if (this.#socket === null) {
-      return Promise.reject(
-        this.#closed ?? new DecisionNodeError('the session is not connected: call connect() first'),
-      );
+      return Promise.reject(this.#closed ?? new DecisionNodeError('the session is not connected: call connect() first'));
     }
-    let seq: number;
-    if (frame.seq === undefined || frame.seq === null) {
-      seq = ++this.#seq;
-    } else {
-      if (!Number.isSafeInteger(frame.seq) || frame.seq < 0) {
-        return Promise.reject(new RangeError(`seq must be a whole number from 0 to 2^53 - 1, got ${String(frame.seq)}`));
-      }
-      seq = frame.seq;
+    try {
+      this.#checkFrame(frame);
+    } catch (err) {
+      return Promise.reject(err);
     }
-    if (frame.questions !== undefined && frame.questions !== null && !Array.isArray(frame.questions)) {
-      return Promise.reject(new TypeError('questions must be a list of question ids'));
-    }
-    const message: Record<string, unknown> = { seq };
+    const message: Record<string, unknown> = { seq: 0 };
     if (frame.frame !== undefined && frame.frame !== null) message.frame = frame.frame;
     const image = frame.image;
     const finish = (wire: unknown): number => {
+      // The seq is taken only when the frame goes out, so a refused frame uses none.
+      const seq = frame.seq === undefined || frame.seq === null ? ++this.#seq : frame.seq;
+      message.seq = seq;
       if (wire !== undefined) message.image = wire;
       if (frame.questions !== undefined && frame.questions !== null) message.questions = [...frame.questions];
       if (frame.reset !== undefined && frame.reset !== null) message.reset = frame.reset;
@@ -379,8 +376,46 @@ export class Session {
       }
       return this.#enqueue(async () => finish(undefined));
     }
-    const wire = this.#frameImage(image);
-    return this.#enqueue(async () => finish(await wire));
+    return this.#enqueue(async () => finish(await this.#frameImage(image)));
+  }
+
+  /**
+   * A frame's fixed rules, before anything is written: `seq` from 0 to 2^53 - 1;
+   * a `frame` or an `image`; a `frame` that is a non-empty string, an object or
+   * an array; `questions` a non-empty list of the session's ids; `reset` a
+   * boolean; the nesting limit; no image URL. A fault is the `BadRequestError`
+   * the server's frame error would carry.
+   */
+  #checkFrame(frame: Frame): void {
+    const fault = (message: string) => localError(BadRequestError, message);
+    if (frame === null || typeof frame !== 'object') throw new TypeError('send takes a frame object');
+    const { seq, image, questions, reset } = frame;
+    const value = frame.frame;
+    if (seq !== undefined && seq !== null && (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0 || seq > MAX_SEQ)) {
+      throw fault(`seq: must be an integer from 0 to ${MAX_SEQ}.`);
+    }
+    const hasFrame = value !== undefined && value !== null;
+    if (!hasFrame && (image === undefined || image === null)) throw fault('frame: a frame needs a frame value or an image.');
+    if (hasFrame && (value === '' || (typeof value !== 'string' && typeof value !== 'object'))) {
+      throw fault('frame: must be a string, an object or an array, not empty.');
+    }
+    if (questions !== undefined && questions !== null) {
+      if (!Array.isArray(questions)) throw new TypeError('questions must be a list of question ids');
+      if (questions.length === 0) throw fault("questions: must be a non-empty list of the session's question ids.");
+      const known = Array.isArray(this.raw.questions) ? (this.raw.questions as unknown[]) : null;
+      for (const id of known === null ? [] : questions) {
+        if (!known!.includes(id)) {
+          throw fault(`questions: unknown question id ${typeof id === 'string' ? `'${id}'` : JSON.stringify(id)}`);
+        }
+      }
+    }
+    if (reset !== undefined && reset !== null && typeof reset !== 'boolean') throw fault('reset: must be true or false.');
+    if (hasFrame && nestingDepth(value) + 1 > MAX_NESTING) {
+      throw fault(`The frame nests more than ${MAX_NESTING} objects and arrays inside each other.`);
+    }
+    if (image instanceof Image && image.url !== undefined) {
+      throw fault('image: a frame takes bytes or an upload, not a url.');
+    }
   }
 
   #enqueue(job: () => Promise<number>): Promise<number> {
@@ -394,11 +429,8 @@ export class Session {
 
   async #frameImage(image: NonNullable<Frame['image']>): Promise<unknown> {
     if (!(image instanceof Image)) return image;
-    if (image.url !== undefined) {
-      throw localError(BadRequestError, "A frame's image takes bytes or an upload, not a url.");
-    }
+    const plan = await this.#ctx.placer.check([image], this.#ctx.limits(this.model));
     if (image.uploadId !== undefined) return { upload_id: image.uploadId };
-    const plan = await this.#ctx.placer.check([image]);
     const { wires } = await this.#ctx.placer.place(plan!, undefined);
     const { id: _id, ...wire } = wires[0] as WireImage & { id: string };
     return wire;

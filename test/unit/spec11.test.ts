@@ -21,7 +21,7 @@ import {
   truth,
   type FetchLike,
 } from '../../src/index.js';
-import { checkQuestions, gridSize } from '../../src/checks.js';
+import { checkQuestions, checkRequest, checkSessionOpen, gridSize } from '../../src/checks.js';
 import { errorFromResponse } from '../../src/errors.js';
 import { md5Js } from '../../src/hash.js';
 
@@ -89,7 +89,13 @@ describe('question checks', () => {
   it.each([
     ['a choice without options', { q: choice('?', []) }, BadRequestError],
     ['a choice of 256 options', { q: choice('?', Array.from({ length: 256 }, (_, i) => `o${i}`)) }, BadRequestError],
-    ['a score of 11 levels', { q: score('?', Array.from({ length: 11 }, (_, i) => i)) }, BadRequestError],
+    ['a score of 11 levels', { q: score('?', Array.from({ length: 11 }, (_, i) => `l${i}`)) }, BadRequestError],
+    ['a score of numbers', { q: score('?', [1, 2]) }, ValidationError],
+    ['an unknown question type', { q: { type: 'rank' } }, BadRequestError],
+    ['a question without a type', { q: { instructions: '?' } }, ValidationError],
+    ['a choice without criteria', { q: { type: 'choice', instructions: '?' } }, ValidationError],
+    ['a number with 7 decimals in step', { q: number('?', 0, 1, 0.0000001) }, ValidationError],
+    ['a number beyond 2^53', { q: number('?', 0, 2 ** 54) }, ValidationError],
     ['a score without levels', { q: score('?', []) }, ValidationError],
     ['a truth with neither instructions nor criteria', { q: truth() }, BadRequestError],
     ['a number without instructions', { q: number(undefined, 0, 10) }, BadRequestError],
@@ -112,26 +118,78 @@ describe('question checks', () => {
     expect(() =>
       checkQuestions({
         a: choice('?', Array.from({ length: 255 }, (_, i) => `o${i}`)),
-        b: score('?', Array.from({ length: 10 }, (_, i) => i)),
+        b: score('?', Array.from({ length: 10 }, (_, i) => `l${i}`)),
         c: score('?', ['only']),
         d: truth(undefined, 'yes'),
         e: number('?'),
         f: number('?', 0, 4095),
-        g: { type: 'rank', anything: true },
+        g: { type: 'score', criteria: { '0': 'low', '1': 'high' } },
       }),
     ).not.toThrow();
   });
 
   it('builds the grid in exact decimals', () => {
-    expect(gridSize({ min: 0, max: 0.3, step: 0.1 })).toEqual({ size: 4 });
-    expect(gridSize({})).toEqual({ size: 256 });
-    expect(gridSize({ min: 0, max: 10, step: 3 })).toEqual({ size: 4 });
-    expect(gridSize({ min: 0.25, max: 2, step: 0.5 })).toEqual({ size: 4 });
-    expect(gridSize({ min: -40, max: 10 })).toEqual({ size: 51 });
-    expect(gridSize({ min: -3, max: -2, step: 0.001 })).toEqual({ size: 1001 });
-    expect(gridSize({ min: 0, max: 1e-6, step: 1e-7 })).toEqual({ size: 11 });
-    expect(gridSize({ min: 5, max: 5 })).toEqual({ size: 1 });
-    expect(gridSize({ min: 0, max: 100, step: 0.1 })).toEqual({ size: 1001 });
+    expect(gridSize({ min: 0, max: 0.3, step: 0.1 })).toBe(4);
+    expect(gridSize({})).toBe(256);
+    expect(gridSize({ min: 0, max: 10, step: 3 })).toBe(4);
+    expect(gridSize({ min: 0.25, max: 2, step: 0.5 })).toBe(4);
+    expect(gridSize({ min: -40, max: 10 })).toBe(51);
+    expect(gridSize({ min: -3, max: -2, step: 0.001 })).toBe(1001);
+    expect(gridSize({ min: 0, max: 1e-6, step: 1e-7 })).toBe(11);
+    expect(gridSize({ min: 5, max: 5 })).toBe(1);
+    expect(gridSize({ min: 0, max: 100, step: 0.1 })).toBe(1001);
+  });
+
+  it('raises the API 422 with its entries, and the plain-string 400 with a null error type', () => {
+    const grab = (fn: () => void) => {
+      try {
+        fn();
+      } catch (e) {
+        return e as ValidationError;
+      }
+      throw new Error('no error');
+    };
+    const tooLong = grab(() => checkQuestions({ p: number('Percent?', 0, 1000, 0.1) }));
+    expect(tooLong.entries).toEqual([
+      {
+        type: 'too_long',
+        loc: ['body', 'questions', 'p', 'number'],
+        msg: 'Grid should have at most 4096 values, not 10001',
+        input: { type: 'number', instructions: 'Percent?', min: 0, max: 1000, step: 0.1 },
+        ctx: { field_type: 'Grid', max_length: 4096, actual_length: 10001 },
+      },
+    ]);
+    const bound = grab(() => checkQuestions({ n: number('How much?', 0, 10_000_000_000, 0.000001) }));
+    expect(bound.entries).toEqual([
+      {
+        type: 'less_than_equal',
+        loc: ['body', 'questions', 'n', 'number', 'max'],
+        msg: 'Input should be less than or equal to 999999999.999999',
+        input: 10_000_000_000,
+        ctx: { le: 999999999.999999 },
+      },
+    ]);
+    const truthErr = grab(() => checkQuestions({ q: truth() }));
+    expect(truthErr).toBeInstanceOf(BadRequestError);
+    expect(truthErr.errorType).toBeNull();
+    expect(truthErr.message).toBe('Truth question must have criteria or instructions: q');
+    const nested = grab(() => checkRequest({ state: JSON.parse('['.repeat(128) + ']'.repeat(128)), questions: { q: truth('?') } }));
+    expect(nested).toBeInstanceOf(BadRequestError);
+    expect(nested.errorType).toBe('api_usage_error');
+    expect(() => checkRequest({ state: JSON.parse('['.repeat(127) + ']'.repeat(127)), questions: { q: truth('?') } })).not.toThrow();
+  });
+
+  it('refuses a session window and ttl out of range with the API entries, using a held max_window', () => {
+    let err: ValidationError | undefined;
+    try {
+      checkSessionOpen({ questions: { a: truth('?') }, window: 17, ttl_seconds: 0 }, { sessions: { max_window: 16 } });
+    } catch (e) {
+      err = e as ValidationError;
+    }
+    expect(err?.entries).toEqual([
+      { type: 'less_than_equal', loc: ['body', 'window'], msg: 'Input should be less than or equal to 16', input: 17, ctx: { le: 16 } },
+      { type: 'greater_than_equal', loc: ['body', 'ttl_seconds'], msg: 'Input should be greater than or equal to 1', input: 0, ctx: { ge: 1 } },
+    ]);
   });
 });
 

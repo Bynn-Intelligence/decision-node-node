@@ -7,7 +7,8 @@
  */
 import { BadRequestError, ConnectionError, DecisionNodeError, ServerError, TimeoutError, localError } from './errors.js';
 import { hex, md5, sha256 } from './hash.js';
-import { Image, MAX_IMAGES, checkImageUrl, toBase64, type LocalImage, type WireImage } from './image.js';
+import { heldNumber } from './checks.js';
+import { Image, MAX_IMAGES, MAX_IMAGE_BYTES, checkImageUrl, toBase64, type LocalImage, type WireImage } from './image.js';
 import { backoffSeconds, isLoopbackHost, isSuccess, serialise, type Transport } from './transport.js';
 
 /** Local images of one request totalling under this many bytes go inline as base64; at or above it they are uploaded. */
@@ -17,6 +18,8 @@ export const DEFAULT_INLINE_THRESHOLD = 524_288;
 const CACHE_ENTRIES = 256;
 /** An upload is reused until this long before it expires. */
 const CACHE_MARGIN_MS = 5 * 60 * 1000;
+
+const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 /** Errors of a request naming an upload that is no longer usable; the SDK uploads again once. */
 export const STALE_UPLOAD = new Set(['upload_expired', 'upload_consumed', 'upload_not_found', 'upload_incomplete']);
@@ -59,34 +62,40 @@ export class ImagePlacer {
 
   /**
    * The local checks of a request's images, before anything is sent: at most
-   * 4, unique ids, URLs `https` and at most 2,048 characters, local bytes of a
-   * known format within the size and pixel limits.
+   * 4, ids present and unique, URLs by the rules that need no network, an
+   * upload reference's media type, local bytes of a known format within the
+   * size and pixel limits. `limits` are the model's published limits when the
+   * client holds them.
    */
-  async check(images: readonly ImageInput[] | null | undefined): Promise<ImagePlan | null> {
+  async check(images: readonly ImageInput[] | null | undefined, limits: Record<string, unknown> = {}): Promise<ImagePlan | null> {
     if (images === undefined || images === null) return null;
     if (!Array.isArray(images)) throw new TypeError('images must be an array');
     if (images.length === 0) return null;
-    if (images.length > MAX_IMAGES) {
-      throw localError(BadRequestError, `Too many images. Must have at most ${MAX_IMAGES} images.`);
+    const most = heldNumber(limits, 'max_images', MAX_IMAGES);
+    const biggest = heldNumber(limits, 'max_image_bytes', MAX_IMAGE_BYTES);
+    if (images.length > most) {
+      throw localError(BadRequestError, `Too many images. Must have at most ${most} images.`);
     }
     const ids = new Set<string>();
     const slots: ImagePlan['slots'] = [];
-    for (const img of images) {
+    for (const [i, img] of images.entries()) {
       if (img === null || typeof img !== 'object') throw new TypeError('an image must be an Image or a wire-form object');
       const id = (img as { id?: unknown }).id;
-      if (typeof id === 'string') {
-        if (ids.has(id)) throw localError(BadRequestError, `Image ids must be unique within a request: ${id}`);
-        ids.add(id);
-      }
+      if (typeof id !== 'string' || id === '') throw localError(BadRequestError, `Image ${i} needs an id.`);
+      if (ids.has(id)) throw localError(BadRequestError, `Duplicate image id: ${id}`);
+      ids.add(id);
       if (!(img instanceof Image)) {
         slots.push({ wire: img });
       } else if (img.url !== undefined) {
         checkImageUrl(img.id, img.url);
         slots.push({ wire: img.referenceWire() });
       } else if (img.uploadId !== undefined) {
+        if (img.mediaType !== undefined && !MEDIA_TYPES.has(img.mediaType)) {
+          throw localError(BadRequestError, `Image ${img.id}: media_type must be image/jpeg, image/png or image/webp.`);
+        }
         slots.push({ wire: img.referenceWire() });
       } else {
-        slots.push({ local: await img.checkLocal() });
+        slots.push({ local: await img.checkLocal(biggest) });
       }
     }
     return { slots };
@@ -109,7 +118,7 @@ export class ImagePlacer {
         continue;
       }
       total += slot.local.bytes.length;
-      const hit = this.#cache.size > 0 ? this.#lookup(await this.#key(slot.local)) : undefined;
+      const hit = this.#cache.size > 0 ? await this.#lookup(await this.#key(slot.local)) : undefined;
       if (hit !== undefined) {
         wires[i] = { id: slot.local.id, upload_id: hit };
         placed.add(hit);
@@ -148,9 +157,12 @@ export class ImagePlacer {
     const keys = await Promise.all(locals.map((l) => this.#key(l)));
     const waits = new Map<string, Promise<string>>();
     const mine: Array<[string, LocalImage]> = [];
+    const hits = new Map<string, string | undefined>();
+    for (const key of keys) if (!hits.has(key)) hits.set(key, await this.#lookup(key));
+    // From here to the registration of in-flight uploads nothing is awaited, so two calls never both upload the same bytes.
     keys.forEach((key, i) => {
       if (waits.has(key)) return;
-      const hit = this.#lookup(key);
+      const hit = hits.get(key);
       if (hit !== undefined) {
         waits.set(key, Promise.resolve(hit));
         return;
@@ -184,7 +196,8 @@ export class ImagePlacer {
     return keys.map((k) => resolved.get(k)!);
   }
 
-  async #presignAndPut(items: Array<[string, LocalImage]>, signal: AbortSignal | undefined, again = false): Promise<Map<string, string>> {
+  /** One presign for the files; the URLs live `expires_in` seconds (300) from the answer, by the client's clock. */
+  async #presign(items: Array<[string, LocalImage]>, signal: AbortSignal | undefined): Promise<{ uploads: Presigned[]; urlsExpire: number }> {
     const files = await Promise.all(
       items.map(async ([, l]) => ({
         content_type: l.mediaType,
@@ -193,7 +206,6 @@ export class ImagePlacer {
         sha256: toBase64(await sha256(l.bytes)),
       })),
     );
-    const presignedAt = Date.now();
     const { body, res } = await this.#transport.json({ method: 'POST', path: '/v1/uploads', body: serialise({ files }), signal });
     const uploads = Array.isArray(body.uploads) ? (body.uploads as Presigned[]) : [];
     if (uploads.length !== items.length || uploads.some((u) => !u || typeof u.upload_id !== 'string' || typeof u.url !== 'string')) {
@@ -204,19 +216,29 @@ export class ImagePlacer {
         headers: res.headers,
       });
     }
-    try {
-      await Promise.all(items.map(([, l], i) => this.#put(uploads[i]!, l.bytes, signal)));
-    } catch (err) {
-      // A storage URL whose 5 minutes passed refuses the PUT with 403: presign once more.
-      const expiresIn = typeof body.expires_in === 'number' ? body.expires_in * 1000 : 300_000;
-      if (!again && err instanceof DecisionNodeError && err.status === 403 && Date.now() - presignedAt >= expiresIn) {
-        return this.#presignAndPut(items, signal, true);
-      }
-      throw err;
-    }
+    const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 300;
+    return { uploads, urlsExpire: (await this.#transport.now()) + expiresIn * 1000 };
+  }
+
+  async #presignAndPut(items: Array<[string, LocalImage]>, signal: AbortSignal | undefined): Promise<Map<string, string>> {
+    const { uploads, urlsExpire } = await this.#presign(items, signal);
+    const done = await Promise.all(
+      items.map(async (item, i) => {
+        let up = uploads[i]!;
+        try {
+          await this.#put(up, item[1].bytes, signal);
+        } catch (err) {
+          // A 403 once the URL's time has passed means presign again, once; a 403 before it is a refusal.
+          if (!(err instanceof DecisionNodeError) || err.status !== 403 || (await this.#transport.now()) < urlsExpire) throw err;
+          up = (await this.#presign([item], signal)).uploads[0]!;
+          await this.#put(up, item[1].bytes, signal);
+        }
+        return up;
+      }),
+    );
     const out = new Map<string, string>();
     items.forEach(([key], i) => {
-      const up = uploads[i]!;
+      const up = done[i]!;
       out.set(key, up.upload_id);
       const expiresAt = typeof up.expires_at === 'string' ? Date.parse(up.expires_at) : NaN;
       if (Number.isFinite(expiresAt)) this.#remember(key, up.upload_id, expiresAt);
@@ -277,10 +299,10 @@ export class ImagePlacer {
     }
   }
 
-  #lookup(key: string): string | undefined {
+  async #lookup(key: string): Promise<string | undefined> {
     const entry = this.#cache.get(key);
     if (entry === undefined) return undefined;
-    if (Date.now() >= entry.expiresAt - CACHE_MARGIN_MS) {
+    if ((await this.#transport.now()) >= entry.expiresAt - CACHE_MARGIN_MS) {
       this.#cache.delete(key);
       return undefined;
     }
