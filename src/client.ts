@@ -9,6 +9,7 @@ import {
   type AnswersFor,
   type DecisionResult,
 } from './answers.js';
+import { Batches, type BatchRequest, type BatchRun, type RunBatchOptions } from './batches.js';
 import { checkQuestions } from './checks.js';
 import { BadRequestError, DecisionNodeError, ServerError } from './errors.js';
 import { Image } from './image.js';
@@ -71,7 +72,7 @@ export interface ClientOptions {
   /** Extra headers sent on every API request and on a session's handshake; never to the storage of an upload. */
   headers?: Record<string, string>;
   /**
-   * Local images of one request (or session frame) that total
+   * Local images of one request (or session frame, or batch line) that total
    * under this many bytes go inline as base64; at or above it they are
    * uploaded once and named by `upload_id`. A whole number 0 or more.
    * Default `DEFAULT_INLINE_THRESHOLD` (524,288).
@@ -95,8 +96,8 @@ export interface ClientOptions {
    */
   fetchHonoursManualRedirect?: boolean;
   /**
-   * The wait between attempts, between upload retries and before a session is
-   * reopened. Default: a timer. Tests can pass their own to
+   * The wait between attempts, between upload retries, between batch polls and
+   * before a session is reopened. Default: a timer. Tests can pass their own to
    * record the waits instead of sleeping.
    */
   sleep?: SleepFn;
@@ -236,6 +237,8 @@ export class DecisionNode {
   readonly timeout: number;
   readonly maxRetries: number;
   readonly inlineThreshold: number;
+  /** The Batch API: `create`, `add`, `finalize`, `get`, `list`, `results`, `cancel` and `run`. */
+  readonly batches: Batches;
   readonly #transport: Transport;
   readonly #placer: ImagePlacer;
 
@@ -282,6 +285,7 @@ export class DecisionNode {
       sleep: options.sleep ?? sleep,
     });
     this.#placer = new ImagePlacer(this.#transport, inlineThreshold);
+    this.batches = new Batches({ transport: this.#transport, placer: this.#placer, model: this.model });
   }
 
   /** One decision: sends `POST /v1/decide` and returns typed answers. */
@@ -577,6 +581,14 @@ export class DecisionNode {
       this.#transport.sleep,
       { ...options, timeout: this.timeout },
     );
+  }
+
+  /**
+   * A whole batch: create a draft, add the requests, finalize, poll until it
+   * ends, and return it with its results. See `batches.run`.
+   */
+  async runBatch(requests: readonly BatchRequest[], options: RunBatchOptions = {}): Promise<BatchRun> {
+    return this.batches.run(requests, options);
   }
 
   /**

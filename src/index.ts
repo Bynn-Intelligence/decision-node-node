@@ -75,6 +75,22 @@ export {
   type SessionParams,
   type SuperviseOptions,
 } from './sessions.js';
+export {
+  Batch,
+  BatchResult,
+  BatchResults,
+  Batches,
+  DEFAULT_BATCH_TIMEOUT,
+  DEFAULT_POLL_INTERVAL,
+  MAX_BATCH_ADD_BYTES,
+  MIN_POLL_INTERVAL,
+  type BatchCounters,
+  type BatchPage,
+  type BatchRequest,
+  type BatchRun,
+  type BatchState,
+  type RunBatchOptions,
+} from './batches.js';
 export { parseSafety, type CheckedSafety, type Safety, type UncheckedSafety } from './safety.js';
 export {
   AuthenticationError,
