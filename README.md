@@ -106,7 +106,40 @@ How a local image travels is chosen for you, for the fastest answer:
 
 Set `inlineThreshold` on the client to move the cut-off: `0` uploads every local image, a large value sends everything inline. `dn.upload(images)` uploads images whatever their size and returns their upload ids, for use later with `Image.fromUploadId`. No image is ever resized or re-encoded.
 
-Every image is checked before anything is sent: at most 4 per request, ids present and unique, URLs by the rules above that need no network, an upload id's media type one of the three, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
+Every image is checked before anything is sent: at most 16 per request, ids present and unique, URLs by the rules above that need no network, an upload id's media type one of the three, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
+
+## Videos
+
+Video is available when the API enables it. A video is sent as the frames you sampled, each with its time in seconds, and the questions see them as one video, in order and with their times. Only frames are sent: no video file, no video URL and no sound go to the API.
+
+```ts
+import { Video, VideoFrame, number, truth } from '@bynn/decisionnode';
+
+// cameraFrames: [seconds, JPEG bytes] pairs you already hold
+const frames = cameraFrames.map(([t, jpeg]) => new VideoFrame(t, jpeg));
+
+const d = await dn.decide({
+  state: 'Warehouse camera 4, loading dock, shift B.',
+  videos: [new Video('dock', frames, { fps: 2 })],
+  questions: {
+    fall: truth('Does a person fall in the video?'),
+    forklifts: number('How many forklifts pass the door?', 0, 50),
+  },
+});
+
+d.answers.fall.truth;
+d.usage.videoFrames;
+d.warnings;
+```
+
+| | |
+|---|---|
+| `new Video(id, frames, { fps, start, end })` | `id` is unique across the request's images and videos. `fps` caps the frames read a second (above 0, at most 4; the API reads 2 by default). `start` and `end` set the window read, on the frames' own times; `end` is after `start`. Left out, the API's defaults apply |
+| `new VideoFrame(t, data, mediaType?)` | `t` in seconds, at least 0, larger than the frame before it. `data` is JPEG, PNG or WebP bytes (`Uint8Array` or `ArrayBuffer`, the type read from them) or base64 text with its media type |
+
+A request holds at most 4 videos. The ids, times, media types, `fps` and the window are checked before anything is sent, and a fault throws `BadRequestError` as the API would. The frame limits are the API's and are published with it. Frames always go inline: they are never uploaded or resized. `decide`, `systemone`, the helpers, `decideMany` and batch requests take `videos`; sessions do not.
+
+To turn a video file into frames, use the `dn` command-line tool (`dn truth "Does a person fall?" --video dock.mp4 --fps 2`); it runs FFmpeg on your machine and sends only the frames. This package has no such dependency.
 
 ## The client
 
@@ -150,7 +183,7 @@ The base URL must use `https`; `http` is accepted only for `localhost`, `127.0.0
 
 An answer of a type this version does not know yet is an `UnknownAnswer` with every field in `raw`, and so is an answer of a known type with a field missing or of the wrong type: the decision does not fail. `check`, `classify`, `score` and `number` promise a typed answer instead, so when their own answer is missing or malformed they throw a `ServerError` with the status, `requestId` and the server's `reason` from `x-decisionnode-error`. Every method takes a last argument `{ signal }` to cancel the call with an `AbortSignal`.
 
-A `Decision` has `answers`, `model` (the version that answered), `usage.inputTokens`, `usage.outputTokens`, `requestId`, `latencyMs` (the server's time), `safety` and `raw` (the parsed body). A token count or latency the response did not carry is `null`, never 0. `decision.get('route')` reads one answer by id.
+A `Decision` has `answers`, `model` (the version that answered), `usage.inputTokens`, `usage.outputTokens`, for a request with videos `usage.videoFrames` and `usage.videoSeconds` (`null` otherwise), `warnings` (what the API changed when it read the videos, an empty array when nothing), `requestId`, `latencyMs` (the server's time), `safety` and `raw` (the parsed body). A token count or latency the response did not carry is `null`, never 0. `decision.get('route')` reads one answer by id.
 
 ### Checked before sending
 
@@ -437,7 +470,7 @@ Limits differ by model version; `models()` returns each model's published limits
 
 The client sends no telemetry and contacts nothing but the base URL, and the storage URLs the API returns for an upload. Besides your key, your own headers and the content headers, the only header it sends to the API is `User-Agent: decisionnode-node/<version>`. To see each attempt, pass `logger: (line) => console.debug(line)`: it prints the method, path, status, request id and time, never the state, the questions or the key.
 
-`SPEC_VERSION` holds the version of the DecisionNode SDK specification this package implements, `"1.1"`.
+`SPEC_VERSION` holds the version of the DecisionNode SDK specification this package implements, `"1.2"`.
 
 ## License
 

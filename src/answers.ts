@@ -197,6 +197,10 @@ export type AnswersFor<Q> = { -readonly [K in keyof Q]: AnswerFor<Q[K]> };
 export interface Usage {
   inputTokens: number | null;
   outputTokens: number | null;
+  /** For a request with videos: the frames the server read; `null` otherwise. */
+  videoFrames: number | null;
+  /** For a request with videos: the seconds of video read, as sent; `null` otherwise. */
+  videoSeconds: number | null;
 }
 
 function count(value: unknown): number | null {
@@ -218,6 +222,11 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
   readonly safety: Safety | null;
   /** The response body as parsed. */
   readonly raw: Record<string, unknown>;
+  /**
+   * What the server changed when it read the request's videos (a lower rate or
+   * size), as sent; empty when it sent nothing.
+   */
+  readonly warnings: string[];
 
   constructor(body: Record<string, unknown>, headers: Record<string, string>) {
     this.raw = body;
@@ -225,7 +234,13 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
     const answers = (body.answers && typeof body.answers === 'object' ? body.answers : {}) as Record<string, unknown>;
     this.answers = Object.fromEntries(Object.entries(answers).map(([id, a]) => [id, parseAnswer(a)])) as A;
     const usage = (body.usage && typeof body.usage === 'object' ? body.usage : {}) as Record<string, unknown>;
-    this.usage = { inputTokens: count(usage.input_tokens), outputTokens: count(usage.output_tokens) };
+    this.usage = {
+      inputTokens: count(usage.input_tokens),
+      outputTokens: count(usage.output_tokens),
+      videoFrames: count(usage.video_frames),
+      videoSeconds: count(usage.video_seconds),
+    };
+    this.warnings = Array.isArray(body.warnings) ? body.warnings.filter((w): w is string => typeof w === 'string') : [];
     this.requestId = headers['x-request-id'] ?? null;
     const latency = headers['x-decisionnode-latency-ms'];
     const n = latency === undefined || latency.trim() === '' ? NaN : Number(latency);

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+Implements version 1.2 of the DecisionNode SDK specification (`SPEC_VERSION` is `"1.2"`) and passes conformance suite 1.7.
+
+- Videos sent as frames: `new Video(id, frames, { fps, start, end })` and `new VideoFrame(t, data, mediaType?)`, taken as `videos` by `decide`, `systemone`, `check`, `classify`, `score`, `number`, `gate`, `decideMany` requests, batch requests and `checkRequest`. A frame's data is bytes (its type read from the first bytes) or base64 text with its media type. Frames always go inline; `fps`, `start` and `end` are left out of the request when not given.
+- Before anything is sent: at most 4 videos, ids unique across images and videos, frame times of at least 0 and strictly increasing, JPEG, PNG or WebP frames, `fps` above 0 and at most 4, and `end` after `start`, each throwing `BadRequestError` with the API's message. Frame limits are the API's.
+- `Decision.usage.videoFrames` and `Decision.usage.videoSeconds` (`null` when absent) and `Decision.warnings` (an empty array when absent).
+- A request holds up to 16 images (4 before); the 17th throws `BadRequestError` with `Too many images: 17, the limit is 16.` before anything is sent. Up to 16 images are uploaded through one presign. `MAX_IMAGES` is 16.
+
 ## 0.1.0 (unreleased)
 
 First version. Implements version 1.1 of the DecisionNode SDK surface: decisions with `truth`, `choice`, `score` and `number` questions, `/v1/systemone`, the models list, image uploads, sessions and the Batch API.

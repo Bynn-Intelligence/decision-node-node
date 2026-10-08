@@ -108,7 +108,7 @@ describe('local image checks', () => {
     ['an IPv4-mapped private address', [Image.fromUrl('u', 'https://[::ffff:192.168.0.1]/a.jpg')], /private address/],
     ['a NAT64 loopback', [Image.fromUrl('u', 'https://[64:ff9b::7f00:1]/a.jpg')], /private address/],
     ['an upload reference of another type', [Image.fromUploadId('r', 'upl_0', 'image/gif')], /media_type must be/],
-    ['five images', Array.from({ length: 5 }, (_, i) => Image.fromUrl(`u${i}`, 'https://example.com/a.jpg')), /at most 4 images/],
+    ['seventeen images', Array.from({ length: 17 }, (_, i) => Image.fromUrl(`u${i}`, 'https://example.com/a.jpg')), /^Too many images: 17, the limit is 16\.$/],
     ['repeated ids', [Image.fromUrl('a', 'https://example.com/1.jpg'), Image.fromUrl('a', 'https://example.com/2.jpg')], /Duplicate image id/],
   ])('refuses %s with BadRequestError and sends nothing', async (_name, images, message) => {
     const { err, calls } = await decideWith(images);

@@ -16,6 +16,7 @@ import {
 import type { Questions } from './questions.js';
 import { heldNumber, type HeldLimits } from './checks.js';
 import { prepare, withImages, type Prepared } from './request.js';
+import type { VideoInput } from './video.js';
 import { abortReason, type RawResponse, type Transport } from './transport.js';
 import type { ImageInput, ImagePlacer } from './uploads.js';
 
@@ -36,6 +37,8 @@ export interface BatchRequest<Q extends Questions = Questions> {
   state?: unknown;
   questions: Q;
   images?: readonly ImageInput[] | null;
+  /** Videos as frames, sent in the line as the live call sends them. */
+  videos?: readonly VideoInput[] | null;
   /** Default: the client's model. */
   model?: string | null;
 }
@@ -526,7 +529,9 @@ export class Batches {
         state: req.state === undefined || req.state === null ? '' : req.state,
         questions: req.questions,
       };
-      lines.push({ prepared: await prepare(this.#ctx.placer, fields, req.images, 'decide', this.#ctx.limits(model)) });
+      lines.push({
+        prepared: await prepare(this.#ctx.placer, fields, req.images, 'decide', this.#ctx.limits(model), req.videos),
+      });
     }
     return lines;
   }

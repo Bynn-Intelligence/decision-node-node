@@ -13,6 +13,7 @@ import { Batches, CHECK_REQUESTS, type BatchRequest, type BatchRun, type RunBatc
 import { checkRequest, checkSessionOpen, type HeldLimits } from './checks.js';
 import { BadRequestError, DecisionNodeError, ServerError } from './errors.js';
 import { Image } from './image.js';
+import type { VideoInput } from './video.js';
 import { choice, number as numberQuestion, score as scoreQuestion, truth, type Questions } from './questions.js';
 import { checkQuestionMap, prepare, withImages, type Prepared } from './request.js';
 import {
@@ -141,8 +142,10 @@ export interface DecideParams<Q extends Questions = Questions> {
   state?: unknown;
   /** Questions by id. Builders or plain wire-form objects. */
   questions: Q;
-  /** Up to 4 images, seen by every question. */
+  /** Up to 16 images, seen by every question. */
   images?: readonly ImageInput[] | null;
+  /** Up to 4 videos, as the frames you sampled, seen by every question. */
+  videos?: readonly VideoInput[] | null;
   /** Overrides the client's model for this call. An empty string counts as not given. */
   model?: string | null;
 }
@@ -155,6 +158,7 @@ export interface CheckParams {
   /** What a no means. */
   ifFalse?: unknown;
   images?: readonly ImageInput[] | null;
+  videos?: readonly VideoInput[] | null;
   model?: string | null;
 }
 
@@ -167,6 +171,7 @@ export interface ClassifyParams<C extends ChoiceOptions = ChoiceOptions> {
   /** A map of option name to description, or a list of names. */
   options: C;
   images?: readonly ImageInput[] | null;
+  videos?: readonly VideoInput[] | null;
   model?: string | null;
 }
 
@@ -176,6 +181,7 @@ export interface ScoreParams {
   /** Levels, low to high. */
   levels: readonly unknown[];
   images?: readonly ImageInput[] | null;
+  videos?: readonly VideoInput[] | null;
   model?: string | null;
 }
 
@@ -190,6 +196,7 @@ export interface NumberParams {
   /** The spacing, above 0 (server default 1). */
   step?: number | null;
   images?: readonly ImageInput[] | null;
+  videos?: readonly VideoInput[] | null;
   model?: string | null;
 }
 
@@ -199,6 +206,7 @@ export interface GateParams {
   /** Anything that helps judge it: environment, requester, target. */
   context?: unknown;
   images?: readonly ImageInput[] | null;
+  videos?: readonly VideoInput[] | null;
   model?: string | null;
 }
 
@@ -381,7 +389,14 @@ export class DecisionNode {
       state: params.state === undefined || params.state === null ? '' : params.state,
       questions: transform ? transform(questions) : questions,
     };
-    return prepare(this.#placer, fields, params.images, transform ? 'systemone' : 'decide', this.#limits(fields.model));
+    return prepare(
+      this.#placer,
+      fields,
+      params.images,
+      transform ? 'systemone' : 'decide',
+      this.#limits(fields.model),
+      params.videos,
+    );
   }
 
   /**
@@ -499,6 +514,7 @@ export class DecisionNode {
         state: params.state,
         questions: { check: truth(params.instructions, params.ifTrue, params.ifFalse) },
         images: params.images,
+        videos: params.videos,
         model: params.model,
       },
       options.signal,
@@ -514,7 +530,13 @@ export class DecisionNode {
     const answer = await this.#helper(
       'classify',
       ChoiceAnswer,
-      { state: params.state, questions: { classify: question }, images: params.images, model: params.model },
+      {
+        state: params.state,
+        questions: { classify: question },
+        images: params.images,
+        videos: params.videos,
+        model: params.model,
+      },
       options.signal,
     );
     return answer as unknown as ChoiceAnswer<OptionsOf<C>>;
@@ -529,6 +551,7 @@ export class DecisionNode {
         state: params.state,
         questions: { score: scoreQuestion(params.instructions, params.levels) },
         images: params.images,
+        videos: params.videos,
         model: params.model,
       },
       options.signal,
@@ -544,6 +567,7 @@ export class DecisionNode {
         state: params.state,
         questions: { number: numberQuestion(params.instructions, params.min, params.max, params.step) },
         images: params.images,
+        videos: params.videos,
         model: params.model,
       },
       options.signal,
@@ -558,7 +582,7 @@ export class DecisionNode {
     const state: Record<string, unknown> = { action: params.action };
     if (params.context !== undefined && params.context !== null) state.context = params.context;
     const d = await this.decide(
-      { state, questions: gateQuestions(), images: params.images, model: params.model },
+      { state, questions: gateQuestions(), images: params.images, videos: params.videos, model: params.model },
       options,
     );
     return d as unknown as Decision<GateAnswers>;

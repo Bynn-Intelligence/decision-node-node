@@ -67,6 +67,16 @@ export {
 } from './image.js';
 export { MAX_CHOICE_OPTIONS, MAX_GRID_VALUES, MAX_SCORE_LEVELS } from './checks.js';
 export {
+  MAX_VIDEOS,
+  MAX_VIDEO_FPS,
+  Video,
+  VideoFrame,
+  type VideoInput,
+  type VideoOptions,
+  type WireVideo,
+  type WireVideoFrame,
+} from './video.js';
+export {
   FrameError,
   REOPEN_CODES,
   Reply,

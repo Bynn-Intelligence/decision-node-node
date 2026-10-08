@@ -32,6 +32,8 @@ import {
   TruthAnswer,
   UnknownAnswer,
   ValidationError,
+  Video,
+  VideoFrame,
   RateLimitError,
   OverloadedError,
   choice,
@@ -173,7 +175,13 @@ function normDecision(d: Decision): Json {
     model: d.model,
     request_id: d.requestId,
     latency_ms: d.latencyMs,
-    usage: { input_tokens: d.usage.inputTokens, output_tokens: d.usage.outputTokens },
+    usage: {
+      input_tokens: d.usage.inputTokens,
+      output_tokens: d.usage.outputTokens,
+      video_frames: d.usage.videoFrames,
+      video_seconds: d.usage.videoSeconds,
+    },
+    warnings: d.warnings,
     safety: normSafety(d.safety),
     answers: normAnswers(d.answers),
     raw: d.raw,
@@ -289,6 +297,22 @@ function decode(value: Json, ctx: Json = {}): Json {
           return score(raw.instructions, raw.levels);
         case '$number':
           return number(raw.instructions, raw.min, raw.max, raw.step);
+        case '$video': {
+          const a = decode(raw, ctx);
+          const options: Json = {};
+          for (const k of ['fps', 'start', 'end']) if (k in a) options[k] = a[k];
+          return new Video(a.id, a.frames, options);
+        }
+        case '$frame': {
+          const a = decode(raw, ctx);
+          const data =
+            'path' in a
+              ? new Uint8Array(readFileSync(join(SUITE, a.path)))
+              : 'data_base64' in a
+                ? new Uint8Array(Buffer.from(a.data_base64, 'base64'))
+                : a.data_text;
+          return new VideoFrame(a.t, data, a.media_type ?? undefined);
+        }
         case '$image': {
           const a = decode(raw, ctx);
           if ('url' in a) return Image.fromUrl(a.id, a.url);
@@ -316,6 +340,7 @@ function decideParams(args: Json, ctx: Json): Json {
   const p: Json = { questions: decode(args.questions, ctx) };
   if ('state' in args) p.state = decode(args.state, ctx);
   if ('images' in args) p.images = decode(args.images, ctx);
+  if ('videos' in args) p.videos = decode(args.videos, ctx);
   if ('model' in args) p.model = args.model;
   return p;
 }
@@ -362,6 +387,7 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
   const common = (p: Json) => {
     if ('state' in args) p.state = decode(args.state, ctx);
     if ('images' in args) p.images = decode(args.images, ctx);
+    if ('videos' in args) p.videos = decode(args.videos, ctx);
     if ('model' in args) p.model = args.model;
     return p;
   };
@@ -597,9 +623,26 @@ function checkRequest(exp: Json, got: Json, where: string): void {
   }
 }
 
-function permutations(xs: number[]): number[][] {
-  if (xs.length <= 1) return [xs];
-  return xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
+/**
+ * Assigns the expected parallel entries i..j-1 to recorded requests not yet
+ * taken, backtracking when a later entry finds none: never every order, since
+ * a case may hold sixteen parallel PUTs.
+ */
+function assignParallel(expected: Json[], log: Json[], i: number, j: number, k: number, used: Set<number>, reasons: string[]): boolean {
+  if (k === j) return true;
+  for (let g = i; g < j; g++) {
+    if (used.has(g)) continue;
+    try {
+      checkRequest(expected[k], log[g], `requests[${k}]`);
+    } catch (err) {
+      reasons.push((err as Error).message);
+      continue;
+    }
+    used.add(g);
+    if (assignParallel(expected, log, i, j, k + 1, used, reasons)) return true;
+    used.delete(g);
+  }
+  return false;
 }
 
 function checkRequestList(expected: Json[], log: Json[]): void {
@@ -616,17 +659,8 @@ function checkRequestList(expected: Json[], log: Json[]): void {
     let j = i;
     while (j < expected.length && expected[j].parallel) j++;
     // Requests sent in parallel may arrive in any order: one assignment must hold.
-    const idx = Array.from({ length: j - i }, (_, k) => i + k);
     const reasons: string[] = [];
-    const ok = permutations(idx).some((perm) => {
-      try {
-        idx.forEach((k, n) => checkRequest(expected[k], log[perm[n]!], `requests[${k}]`));
-        return true;
-      } catch (err) {
-        reasons.push((err as Error).message);
-        return false;
-      }
-    });
+    const ok = assignParallel(expected, log, i, j, i, new Set(), reasons);
     if (!ok) throw new Error(`no order of the parallel requests matches: ${reasons[0]}`);
     i = j;
   }

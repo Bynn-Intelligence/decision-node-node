@@ -65,7 +65,7 @@ export class ImagePlacer {
 
   /**
    * The local checks of a request's images, before anything is sent: at most
-   * 4, ids present and unique, URLs by the rules that need no network, an
+   * 16, ids present and unique, URLs by the rules that need no network, an
    * upload reference's media type, local bytes of a known format within the
    * size and pixel limits. `limits` are the model's published limits when the
    * client holds them.
@@ -77,7 +77,7 @@ export class ImagePlacer {
     const most = heldNumber(limits, 'max_images', MAX_IMAGES);
     const biggest = heldNumber(limits, 'max_image_bytes', MAX_IMAGE_BYTES);
     if (images.length > most) {
-      throw localError(BadRequestError, `Too many images. Must have at most ${most} images.`);
+      throw localError(BadRequestError, `Too many images: ${images.length}, the limit is ${most}.`);
     }
     const ids = new Set<string>();
     const slots: ImagePlan['slots'] = [];

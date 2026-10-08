@@ -84,7 +84,7 @@ describe('configuration', () => {
   });
 
   it('exports the specification version', () => {
-    expect(SPEC_VERSION).toBe('1.1');
+    expect(SPEC_VERSION).toBe('1.2');
   });
 
   it('uses the defaults', () => {

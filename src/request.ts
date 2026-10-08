@@ -7,6 +7,7 @@ import { checkRequest, type HeldLimits, type Profile } from './checks.js';
 import { serialise } from './transport.js';
 import type { ImagePlacer, ImageInput, ImagePlan } from './uploads.js';
 import type { WireImage } from './image.js';
+import { checkVideos, videoWires, type VideoInput } from './video.js';
 
 export interface Prepared {
   /** The body without `images`, as JSON text. */
@@ -24,7 +25,8 @@ export function checkQuestionMap(questions: unknown): Record<string, unknown> {
 
 /**
  * Checks and serialises one request. `fields` are the body's fields in order,
- * `questions` among them; `images` are checked after the questions.
+ * `questions` among them; `images` are checked after the questions, then the
+ * `videos`, which are sent after the other fields (frames always inline).
  */
 export async function prepare(
   placer: ImagePlacer,
@@ -32,13 +34,17 @@ export async function prepare(
   images: readonly ImageInput[] | null | undefined,
   profile: Profile = 'decide',
   limits: HeldLimits = {},
+  videos?: readonly VideoInput[] | null,
 ): Promise<Prepared> {
   checkQuestionMap(fields.questions);
-  // The images count toward the nesting limit as the objects they will be.
-  const probe = Array.isArray(images) && images.length > 0 ? { ...fields, images: images.map(() => ({ id: '' })) } : fields;
+  const wires = videoWires(videos);
+  // The images and videos count toward the nesting limit as the objects they will be.
+  let probe = Array.isArray(images) && images.length > 0 ? { ...fields, images: images.map(() => ({ id: '' })) } : fields;
+  if (wires.length > 0) probe = { ...probe, videos: wires.map(() => ({ id: '' })) };
   checkRequest(probe, profile, limits);
   const plan = await placer.check(images, limits);
-  return { head: serialise(fields), plan };
+  checkVideos(wires, images);
+  return { head: serialise(wires.length > 0 ? { ...fields, videos: wires } : fields), plan };
 }
 
 /** The body with its images added after the other fields. */

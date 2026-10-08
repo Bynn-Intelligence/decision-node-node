@@ -18,7 +18,7 @@ export type ImageSource =
   | { id: string; uploadId: string; mediaType?: ImageMediaType | string };
 
 /** The most images one request, session frame or batch line takes. */
-export const MAX_IMAGES = 4;
+export const MAX_IMAGES = 16;
 /** The most bytes one image may have: 10 MiB. */
 export const MAX_IMAGE_BYTES = 10_485_760;
 /** The most pixels one image may have, read from its header. */
