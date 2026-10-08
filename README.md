@@ -144,7 +144,7 @@ if (pick.present > 0.8 && pick.confidence > 0.7) {
 
 Every field is always there. When several things match, the answer is the best match; say which one you mean in the instructions ("the leftmost yellow package").
 
-A point or box question needs an image in the request. With two or more images, name the one to look in (`point(instructions, 'belt')`). These rules and the units (`'pixels'` or `'normalized'`) are checked before anything is sent, and a fault throws `ValidationError` as the API would. `decide`, `decideMany` and batch requests take point and box questions; `systemone` does not.
+A point or box question needs an image in the request. With two or more images, name the one to look in (`point(instructions, 'belt')`). These rules and the units (`'pixels'` or `'normalized'`) are checked before anything is sent, and a fault throws `ValidationError` as the API would. `decide`, `decideMany` and batch requests take point and box questions.
 
 ## Videos
 
@@ -175,7 +175,7 @@ d.warnings;
 | `new Video(id, frames, { fps, start, end })` | `id` is unique across the request's images and videos. `fps` caps the frames read a second (above 0, at most 4; the API reads 2 by default). `start` and `end` set the window read, on the frames' own times; `end` is after `start`. Left out, the API's defaults apply |
 | `new VideoFrame(t, data, mediaType?)` | `t` in seconds, at least 0, larger than the frame before it. `data` is JPEG, PNG or WebP bytes (`Uint8Array` or `ArrayBuffer`, the type read from them) or base64 text with its media type |
 
-The ids, times, media types, `fps` and the window are checked before anything is sent, and a fault throws `BadRequestError` as the API would. A request holds at most 4 videos; a fifth throws `ValidationError` (a `too_long` entry on the videos). The frame limits are the API's and are published with it. Frames always go inline: they are never uploaded or resized. `decide`, `systemone`, the helpers, `decideMany` and batch requests take `videos`; sessions do not.
+The ids, times, media types, `fps` and the window are checked before anything is sent, and a fault throws `BadRequestError` as the API would. A request holds at most 4 videos; a fifth throws `ValidationError` (a `too_long` entry on the videos). The frame limits are the API's and are published with it. Frames always go inline: they are never uploaded or resized. `decide`, the helpers, `decideMany` and batch requests take `videos`; sessions do not.
 
 To turn a video file into frames, use the `dn` command-line tool (`dn truth "Does a person fall?" --video dock.mp4 --fps 2`); it runs FFmpeg on your machine and sends only the frames. This package has no such dependency.
 
@@ -204,7 +204,6 @@ The base URL must use `https`; `http` is accepted only for `localhost`, `127.0.0
 |---|---|
 | `decide({ state, questions, images, model })` | `Decision` |
 | `decideMany(requests, { concurrency })` | `DecisionResult[]`: one `Decision` or error per request, in input order |
-| `systemone({ state, questions, images, model })` | `Decision`, from `POST /v1/systemone` |
 | `check({ state, instructions, ifTrue, ifFalse, images, model })` | `TruthAnswer` |
 | `classify({ state, instructions, options, images, model })` | `ChoiceAnswer` |
 | `score({ state, instructions, levels, images, model })` | `ScoreAnswer` |
@@ -230,7 +229,7 @@ The client checks every request against every fixed rule the API documents befor
 | Rule | Thrown as |
 |---|---|
 | A question that is not an object, has no `type`, or has a field of the wrong type (`instructions`, a state, an option description, a score level or a truth side that is not a string, an object or an array; a choice without options as an object; a score without levels as a list) | `ValidationError`, the API's entries |
-| An unknown question type, or a `number` question on `systemone` | `BadRequestError`, `api_usage_error`, "Invalid request." |
+| An unknown question type | `BadRequestError`, `api_usage_error`, "Invalid request." |
 | A choice of no options or more than 255, a score of more than 10 levels, a truth with neither instructions nor criteria, a number without instructions | `BadRequestError` with the API's plain message and no `errorType` |
 | A number grid: `min`, `max` or `step` not a finite number, beyond 2^53, `step` not above 0, more than 6 decimals in `min` or `step`, beyond the bound that keeps every value exact, `min` above `max`, more than 4,096 values | `ValidationError`, the API's entries |
 | More than 128 objects and arrays inside each other | `BadRequestError`, `api_usage_error` |
@@ -246,7 +245,6 @@ To check a request without sending it, for example to validate input from a form
 
 ```ts
 await dn.checkRequest('decide', { state, questions, images });
-await dn.checkRequest('systemone', { state, questions });
 await dn.checkRequest('openSession', { questions, window: 8 });
 await dn.checkRequest('batches.create', requests); // or 'batches.add'
 await session.checkFrame({ frame: reading, questions: ['abort'] });
@@ -282,10 +280,6 @@ for (const r of results) {
 ```
 
 At most `concurrency` requests are in flight (default 8). Every request is checked before any is sent: a `concurrency` below 1 throws a `RangeError`, a malformed request (an empty question map, a value that cannot be serialised as JSON) throws a `TypeError`, and a request the API would refuse (see "Checked before sending") throws its error, with nothing sent. Once sending starts, one failure does not stop the others. Requests that carry the same image share one upload.
-
-### `/v1/systemone`
-
-`systemone` sends the same request to `POST /v1/systemone`, the API's strict path: it always sends the model (the call's, else the client's), and writes each `truth` question with the type name that path takes. Its answers read exactly as `decide`'s. That path does not take `number` questions; the API refuses them with a `BadRequestError`.
 
 ### Gate an action
 

@@ -28,10 +28,7 @@ const LEGACY_TRUTH = 'noul';
 const DECIDE_TYPES = new Set(['truth', LEGACY_TRUTH, 'choice', 'score', 'number', 'point', 'box']);
 const PLACE_TYPES = new Set(['point', 'box']);
 const UNITS = new Set(['pixels', 'normalized']);
-const SYSTEMONE_TYPES = new Set([LEGACY_TRUTH, 'choice', 'score']);
 
-/** Which path a request goes to: `/v1/systemone` takes fewer question types, and score levels only as a list. */
-export type Profile = 'decide' | 'systemone';
 
 /**
  * Limits a model publishes at `/v1/models`, held once the client has read them.
@@ -331,7 +328,6 @@ function checkQuestion(
   q: unknown,
   entries: Entry[],
   deferred: Error[],
-  profile: Profile,
   limits: HeldLimits,
   imageIds: readonly unknown[] | null = null,
 ): void {
@@ -345,7 +341,7 @@ function checkQuestion(
     return;
   }
   const type = q.type;
-  if (typeof type !== 'string' || !(profile === 'systemone' ? SYSTEMONE_TYPES : DECIDE_TYPES).has(type)) {
+  if (typeof type !== 'string' || !DECIDE_TYPES.has(type)) {
     deferred.push(withReason(localError(BadRequestError, 'Invalid request.'), `question '${id}': unknown type ${JSON.stringify(type)}`));
     return;
   }
@@ -384,7 +380,7 @@ function checkQuestion(
     let levels: unknown[];
     if (Array.isArray(criteria)) {
       levels = criteria;
-    } else if (isObject(criteria) && profile !== 'systemone' && isIndexKeyed(criteria)) {
+    } else if (isObject(criteria) && isIndexKeyed(criteria)) {
       levels = Array.from({ length: Object.keys(criteria).length }, (_, i) => criteria[String(i)]);
     } else {
       entries.push(entry('list_type', [...loc, 'criteria'], 'Input should be a valid list', criteria));
@@ -425,7 +421,6 @@ function checkQuestion(
  */
 export function checkRequest(
   body: Record<string, unknown>,
-  profile: Profile = 'decide',
   limits: HeldLimits = {},
   extra: Entry[] = [],
   imageIds: readonly unknown[] | null = null,
@@ -437,15 +432,15 @@ export function checkRequest(
   const state = body.state;
   if (present(state) && !isSdl(state)) entries.push(...sdlEntries(['body', 'state'], state));
   const questions = isObject(body.questions) ? body.questions : {};
-  for (const [id, q] of Object.entries(questions)) checkQuestion(id, q, entries, deferred, profile, limits, imageIds);
+  for (const [id, q] of Object.entries(questions)) checkQuestion(id, q, entries, deferred, limits, imageIds);
   entries.push(...tail);
   if (entries.length > 0) throw localValidation(entries);
   if (deferred.length > 0) throw deferred[0]!;
 }
 
 /** The questions alone, as on `/v1/decide`. */
-export function checkQuestions(questions: Record<string, unknown>, profile: Profile = 'decide', limits: HeldLimits = {}): void {
-  checkRequest({ questions }, profile, limits);
+export function checkQuestions(questions: Record<string, unknown>, limits: HeldLimits = {}): void {
+  checkRequest({ questions }, limits);
 }
 
 /**
@@ -477,7 +472,7 @@ export function checkSessionOpen(body: Record<string, unknown>, limits: HeldLimi
       entries.push(entry('less_than_equal', ['body', name], `Input should be less than or equal to ${hi}`, v, { le: hi }));
     }
   }
-  checkRequest({ questions: body.questions }, 'decide', limits, entries);
+  checkRequest({ questions: body.questions }, limits, entries);
   if (sessions.enabled === false) {
     throw localError(BadRequestError, `Model ${String(limits.model)} does not serve sessions.`);
   }

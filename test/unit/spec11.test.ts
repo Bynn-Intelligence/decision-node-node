@@ -217,14 +217,12 @@ describe('number and truth', () => {
     expect(parseAnswer({ type: 'noul', noul: '0.94' })).toBeInstanceOf(UnknownAnswer);
   });
 
-  it('sends systemone with the model and truth written as that path takes it', async () => {
-    const api = fakeApi({ 'POST /v1/systemone': () => DECISION });
-    await client(api.fetch).systemone({ state: 's', questions: { q: truth('?'), c: choice('?', ['a', 'b']) } });
-    expect(JSON.parse(api.calls[0]!.body as string)).toEqual({
-      model: 'decisionnode-latest',
-      state: 's',
-      questions: { q: { type: 'noul', instructions: '?' }, c: { type: 'choice', instructions: '?', criteria: { a: null, b: null } } },
-    });
+  it('has one decision call, /v1/decide, and writes truth as truth', async () => {
+    const api = fakeApi({ 'POST /v1/decide': () => DECISION });
+    const dn = client(api.fetch);
+    expect('systemone' in dn).toBe(false);
+    await dn.decide({ state: 's', questions: { q: truth('?') } });
+    expect(JSON.parse(api.calls[0]!.body as string).questions).toEqual({ q: { type: 'truth', instructions: '?' } });
   });
 });
 
@@ -358,7 +356,6 @@ describe('checks without sending', () => {
     const api = fakeApi({});
     const dn = client(api.fetch, { inlineThreshold: 0 });
     await expect(dn.checkRequest('decide', { questions: { q: truth('?') }, images: [Image.fromBytes('a', PNG)] })).resolves.toBeUndefined();
-    await expect(dn.checkRequest('systemone', { questions: { n: number('How many?') } })).rejects.toBeInstanceOf(BadRequestError);
     await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 65 })).rejects.toBeInstanceOf(ValidationError);
     const repeated = [
       { customId: 'a', questions: { q: truth('?') } },

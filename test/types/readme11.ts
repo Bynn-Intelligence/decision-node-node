@@ -54,9 +54,6 @@ export async function readme11() {
   const ids: string[] = await dn.upload([Image.fromBytes('photo', bytes)]);
   void ids;
 
-  const s1 = await dn.systemone({ state: 's', questions: { t: truth('?') } });
-  void s1.answers.t.truth;
-
   const session = await dn.openSession({
     instructions: 'You are the mission supervisor of a survey drone.',
     state: { mission: 'Survey the north field' },
@@ -101,7 +98,6 @@ export async function readme11() {
 
   const checked = new DecisionNode({ uploadTimeout: 60_000, webSocketOptions: { dispatcher: {} } });
   await checked.checkRequest('decide', { state: 's', questions: { q: truth('?') }, images: [Image.fromBytes('a', bytes)] });
-  await checked.checkRequest('systemone', { state: 's', questions: { q: truth('?') } });
   await checked.checkRequest('openSession', { questions: { a: truth('?') }, window: 8 });
   await checked.checkRequest('batches.create', [{ customId: 'a', questions: { q: truth('?') } }]);
   await session.checkFrame({ frame: { battery: 0.3 }, questions: ['abort'] });

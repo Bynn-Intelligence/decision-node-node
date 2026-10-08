@@ -3,7 +3,7 @@
  * then the body serialised once, so a request the API would refuse is refused
  * here with nothing sent. Images are placed later, per send.
  */
-import { checkRequest, entry, heldNumber, type Entry, type HeldLimits, type Profile } from './checks.js';
+import { checkRequest, entry, heldNumber, type Entry, type HeldLimits } from './checks.js';
 import { Image, MAX_IMAGES } from './image.js';
 import { MAX_VIDEOS } from './video.js';
 import { serialise } from './transport.js';
@@ -34,7 +34,6 @@ export async function prepare(
   placer: ImagePlacer,
   fields: Record<string, unknown>,
   images: readonly ImageInput[] | null | undefined,
-  profile: Profile = 'decide',
   limits: HeldLimits = {},
   videos?: readonly VideoInput[] | null,
 ): Promise<Prepared> {
@@ -45,7 +44,7 @@ export async function prepare(
   if (wires.length > 0) probe = { ...probe, videos: wires.map(() => ({ id: '' })) };
   // The request's image ids as given, for the point and box rules.
   const imageIds = Array.isArray(images) ? images.map((img) => (img !== null && typeof img === 'object' ? (img as { id?: unknown }).id : undefined)) : [];
-  checkRequest(probe, profile, limits, [], imageIds, countEntries(images ?? [], wires, limits));
+  checkRequest(probe, limits, [], imageIds, countEntries(images ?? [], wires, limits));
   const plan = await placer.check(images, limits);
   checkVideos(wires, images);
   return { head: serialise(wires.length > 0 ? { ...fields, videos: wires } : fields), plan };

@@ -47,11 +47,9 @@ try {
 }
 if (!(new ContextLimitError('x') instanceof Error) || ValidationError.name !== 'ValidationError') fail('classes');
 
-// Number, systemone, an upload, a session and a batch.
+// Number, an upload, a session and a batch.
 const n = await dn.number({ state: 'Drone frame over row B4.', instructions: 'How many cars?', min: 0, max: 50 });
 if (n.type !== 'number' || typeof n.number !== 'number') fail('number');
-const s1 = await dn.systemone({ state: 's', questions: { t: truth('Escalate?') } });
-if (typeof s1.answers.t.truth !== 'number') fail('systemone');
 const uploaded = new DecisionNode({ apiKey: 'dn_test_runtime', inlineThreshold: 0 });
 const u = await uploaded.decide({ state: 's', questions: { q: number('How many?', 0, 9) }, images: [Image.fromPath('receipt', `${suite}/fixtures/images/pixel.png`)] });
 if (u.answers.q.type !== 'number') fail('upload');

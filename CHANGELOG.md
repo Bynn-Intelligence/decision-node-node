@@ -2,13 +2,15 @@
 
 ## 0.2.0 (unreleased)
 
-Implements version 1.2 of the DecisionNode SDK specification (`SPEC_VERSION` is `"1.2"`) and passes conformance suite 1.8.
+Implements version 1.2 of the DecisionNode SDK specification (`SPEC_VERSION` is `"1.2"`) and passes conformance suite 1.10.
 
-- Videos sent as frames: `new Video(id, frames, { fps, start, end })` and `new VideoFrame(t, data, mediaType?)`, taken as `videos` by `decide`, `systemone`, `check`, `classify`, `score`, `number`, `gate`, `decideMany` requests, batch requests and `checkRequest`. A frame's data is bytes (its type read from the first bytes) or base64 text with its media type. Frames always go inline; `fps`, `start` and `end` are left out of the request when not given.
+- Videos sent as frames: `new Video(id, frames, { fps, start, end })` and `new VideoFrame(t, data, mediaType?)`, taken as `videos` by `decide`, `check`, `classify`, `score`, `number`, `gate`, `decideMany` requests, batch requests and `checkRequest`. A frame's data is bytes (its type read from the first bytes) or base64 text with its media type. Frames always go inline; `fps`, `start` and `end` are left out of the request when not given.
 - Before anything is sent: ids unique across images and videos, frame times of at least 0 and strictly increasing, JPEG, PNG or WebP frames, `fps` above 0 and at most 4, and `end` after `start`, each throwing `BadRequestError` with the API's message. More than 4 videos throws the API's `ValidationError` (a `too_long` entry on the videos). Frame counts are the API's.
 - `Decision.usage.videoFrames` and `Decision.usage.videoSeconds` (`null` when absent) and `Decision.warnings` (an empty array when absent).
 - The `point` and `box` question types: `point(instructions, image?, units?)` and `box(instructions, image?, units?)`, answered by `PointAnswer` (`x`, `y`) and `BoxAnswer` (`x1`, `y1`, `x2`, `y2`), each with `present`, `confidence`, `image`, `width` and `height`, typed from the questions. A request with one needs an image, and `image` names one of the request's images (required with two or more); with `units` these are checked before anything is sent and throw `ValidationError` with the API's entries.
 - A request holds up to 16 images (4 before); a 17th throws the API's `ValidationError` before anything is sent: a `too_long` entry on the images, listed with the request's other entries, a local image in its `input` without its bytes. Up to 16 images are uploaded through one presign; `upload()` of more throws `BadRequestError` (`files: 1 to 16 files, got 17.`). `MAX_IMAGES` is 16.
+
+Removed: `systemone()`. `POST /v1/systemone` is not part of the API; every decision is sent to `POST /v1/decide`, and `checkRequest` takes `decide`, `openSession`, `batches.create` and `batches.add`.
 
 ## 0.1.0 (unreleased)
 

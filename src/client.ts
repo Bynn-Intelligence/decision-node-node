@@ -222,7 +222,7 @@ export interface DecideManyOptions extends RequestOptions {
 }
 
 /** The calls `checkRequest` checks. */
-export type CheckedMethod = 'decide' | 'systemone' | 'openSession' | 'batches.create' | 'batches.add';
+export type CheckedMethod = 'decide' | 'openSession' | 'batches.create' | 'batches.add';
 
 /** The session WebSocket options, refused when they would turn off certificate checks. */
 function checkWebSocketOptions(options: unknown): Record<string, unknown> {
@@ -236,9 +236,6 @@ function checkWebSocketOptions(options: unknown): Record<string, unknown> {
   if ('headers' in o) throw new TypeError("webSocketOptions may not set headers; use the client's headers option");
   return { ...o };
 }
-
-/** The wire type `/v1/systemone` takes for a `truth` question. */
-const SYSTEMONE_TRUTH = 'noul';
 
 /** The gate's three fixed questions. */
 function gateQuestions() {
@@ -259,15 +256,6 @@ function gateQuestions() {
       block: 'should not run',
     }),
   };
-}
-
-/** The questions with every `truth` written as the wire type `/v1/systemone` takes. */
-function systemoneQuestions(questions: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [id, q] of Object.entries(questions)) {
-    out[id] = q && typeof q === 'object' && (q as { type?: unknown }).type === 'truth' ? { ...q, type: SYSTEMONE_TRUTH } : q;
-  }
-  return out;
 }
 
 /**
@@ -361,25 +349,8 @@ export class DecisionNode {
     return decision;
   }
 
-  /**
-   * One decision on `POST /v1/systemone`. The model is always sent (the
-   * argument's, else the client's) and a `truth` question is written with the
-   * wire type that path takes; every answer reads as on `decide`.
-   */
-  async systemone<const Q extends Questions>(
-    params: DecideParams<Q>,
-    options: RequestOptions = {},
-  ): Promise<Decision<AnswersFor<Q>>> {
-    const prepared = await this.#prepareDecide(params, systemoneQuestions);
-    const { decision } = await this.#send<AnswersFor<Q>>('/v1/systemone', prepared, options.signal);
-    return decision;
-  }
-
   /** The local checks and the body without images, before anything is sent. */
-  async #prepareDecide(
-    params: DecideParams<Questions>,
-    transform?: (questions: Record<string, unknown>) => Record<string, unknown>,
-  ): Promise<Prepared> {
+  async #prepareDecide(params: DecideParams<Questions>): Promise<Prepared> {
     if (params === null || typeof params !== 'object') {
       throw new TypeError('a request must be an object with questions');
     }
@@ -387,16 +358,9 @@ export class DecisionNode {
     const fields = {
       model: params.model || this.model,
       state: params.state === undefined || params.state === null ? '' : params.state,
-      questions: transform ? transform(questions) : questions,
+      questions,
     };
-    return prepare(
-      this.#placer,
-      fields,
-      params.images,
-      transform ? 'systemone' : 'decide',
-      this.#limits(fields.model),
-      params.videos,
-    );
+    return prepare(this.#placer, fields, params.images, this.#limits(fields.model), params.videos);
   }
 
   /**
@@ -664,16 +628,13 @@ export class DecisionNode {
    * await dn.checkRequest('decide', { state, questions, images });
    * ```
    */
-  checkRequest(method: 'decide' | 'systemone', request: DecideParams<Questions>): Promise<void>;
+  checkRequest(method: 'decide', request: DecideParams<Questions>): Promise<void>;
   checkRequest(method: 'openSession', request: SessionParams): Promise<void>;
   checkRequest(method: 'batches.create' | 'batches.add', requests: readonly BatchRequest[]): Promise<void>;
   async checkRequest(method: CheckedMethod, request: unknown): Promise<void> {
     switch (method) {
       case 'decide':
         await this.#prepareDecide(request as DecideParams<Questions>);
-        return;
-      case 'systemone':
-        await this.#prepareDecide(request as DecideParams<Questions>, systemoneQuestions);
         return;
       case 'openSession':
         this.#checkedSessionBody(request as SessionParams);
@@ -684,7 +645,7 @@ export class DecisionNode {
         return;
       default:
         throw new TypeError(
-          `checkRequest takes decide, systemone, openSession, batches.create or batches.add, got ${String(method)}`,
+          `checkRequest takes decide, openSession, batches.create or batches.add, got ${String(method)}`,
         );
     }
   }
@@ -701,7 +662,7 @@ export class DecisionNode {
     options: SuperviseOptions = {},
   ): Promise<SessionClosed | null> {
     if (body === null || typeof body !== 'object') throw new TypeError('supervise takes the session body as an object');
-    checkRequest({ questions: checkQuestionMap(body.questions) }, 'decide', this.#limits(body.model ?? undefined));
+    checkRequest({ questions: checkQuestionMap(body.questions) }, this.#limits(body.model ?? undefined));
     return runSupervise(
       () => this.openSession(body, { signal: options.signal }),
       feed,

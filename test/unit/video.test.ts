@@ -78,13 +78,11 @@ describe('videos in requests', () => {
     expect('videos' in JSON.parse(calls[1]!.body!)).toBe(false);
   });
 
-  it('carries videos on systemone, decideMany and batch lines', async () => {
+  it('carries videos on decideMany and batch lines', async () => {
     const video = new Video('cam', frames(0));
     const { dn, calls } = client();
-    await dn.systemone({ state: 's', questions: Q, videos: [video] });
-    expect(JSON.parse(calls[0]!.body!).videos).toEqual([video.toJSON()]);
     await dn.decideMany([{ state: 'a', questions: Q, videos: [video] }]);
-    expect(JSON.parse(calls[1]!.body!).videos).toEqual([video.toJSON()]);
+    expect(JSON.parse(calls[0]!.body!).videos).toEqual([video.toJSON()]);
     const b = client([{ status: 201, body: { id: 'batch_1', state: 'draft', counters: {} } }]);
     await b.dn.batches.create([{ customId: 'c1', state: 's', questions: Q, videos: [video] }]);
     expect(JSON.parse(b.calls[0]!.body!.split('\n')[0]!).videos).toEqual([video.toJSON()]);

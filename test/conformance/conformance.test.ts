@@ -393,7 +393,6 @@ const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const CHECKED: Record<string, string> = {
   decide: 'decide',
-  systemone: 'systemone',
   open_session: 'openSession',
   'batches.create': 'batches.create',
   'batches.add': 'batches.add',
@@ -419,8 +418,6 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
   switch (method) {
     case 'decide':
       return client.decide(decideParams(args, ctx));
-    case 'systemone':
-      return client.systemone(decideParams(args, ctx));
     case 'decide_many':
       return client.decideMany(
         args.requests.map((r: Json) => decideParams(r, ctx)),

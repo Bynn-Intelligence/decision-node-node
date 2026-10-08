@@ -93,13 +93,11 @@ describe('point and box', () => {
     ]);
   });
 
-  it('refuses missing instructions and systemone, and checks clean requests', async () => {
+  it('refuses missing instructions, and checks clean requests', async () => {
     const { dn, calls } = client();
     const err = await dn.decide({ images: [BELT], questions: { pick: { type: 'point' } } }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BadRequestError);
     expect([(err as BadRequestError).message, (err as BadRequestError).errorType]).toEqual(['Point question must have instructions: pick', null]);
-    const strict = await dn.systemone({ images: [BELT], questions: { damage: box(DAMAGE) } }).catch((e: unknown) => e);
-    expect((strict as BadRequestError).message).toBe('Invalid request.');
     await dn.checkRequest('decide', { images: [BELT], questions: { pick: point(PICK) } });
     await dn.checkRequest('decide', { images: [BELT, DOCK], questions: { pick: point(PICK, 'belt'), pallet: box('?', 'dock') } });
     await expect(dn.batches.create([{ customId: 'c1', state: 's', questions: { damage: box(DAMAGE) } }])).rejects.toBeInstanceOf(ValidationError);

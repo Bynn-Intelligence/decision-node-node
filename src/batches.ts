@@ -530,7 +530,7 @@ export class Batches {
         questions: req.questions,
       };
       lines.push({
-        prepared: await prepare(this.#ctx.placer, fields, req.images, 'decide', this.#ctx.limits(model), req.videos),
+        prepared: await prepare(this.#ctx.placer, fields, req.images, this.#ctx.limits(model), req.videos),
       });
     }
     return lines;
