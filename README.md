@@ -110,6 +110,21 @@ Set `inlineThreshold` on the client to move the cut-off: `0` uploads every local
 
 Every image is checked before anything is sent: ids present and unique, URLs by the rules above that need no network, an upload id's media type one of the three, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. A request holds at most 16 images; a 17th throws `ValidationError` as the API answers it (a `too_long` entry on the images). An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
 
+### Referring to images and videos
+
+The model sees each image as "Picture 1", "Picture 2", ... with its id beside it, numbered from 1 in the order of `images`, and each video as "Video 1", "Video 2", ... in the order of `videos`, numbered separately. Text in the state, the instructions or a criterion can refer to an image by position ("Picture 2", "image 2", "the second image", "the last image") or by its id ("the receipt", "`receipt`"), and to a video the same way ("Video 1" or its id).
+
+```ts
+const d = await dn.decide({
+  state: 'Expense claim 4411.',
+  images: [
+    Image.fromUrl('receipt', 'https://files.example.com/claims/4411/receipt.jpg'),
+    Image.fromUrl('statement', 'https://files.example.com/claims/4411/statement.png'),
+  ],
+  questions: { charged: truth('Does the total in Picture 1 match the charge on the statement?') },
+});
+```
+
 ## Points and boxes
 
 A `point` question finds one spot in an image; a `box` question draws a rectangle around something. They mix freely with the other types in one request, and several of them on the same image share one read of it.
@@ -144,7 +159,7 @@ if (pick.present > 0.8 && pick.confidence > 0.7) {
 
 Every field is always there. When several things match, the answer is the best match; say which one you mean in the instructions ("the leftmost yellow package").
 
-A point or box question needs an image in the request. With two or more images, name the one to look in (`point(instructions, 'belt')`). These rules and the units (`'pixels'` or `'normalized'`) are checked before anything is sent, and a fault throws `ValidationError` as the API would. `decide`, `decideMany` and batch requests take point and box questions.
+A point or box question needs an image in the request. With two or more images, name the one to look in by its id (`point(instructions, 'belt')`); a reference by number ("Picture 2") goes in the instructions. These rules and the units (`'pixels'` or `'normalized'`) are checked before anything is sent, and a fault throws `ValidationError` as the API would. `decide`, `decideMany` and batch requests take point and box questions.
 
 ## Videos
 

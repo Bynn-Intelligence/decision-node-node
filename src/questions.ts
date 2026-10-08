@@ -40,7 +40,10 @@ export interface NumberQuestion {
 export interface PointQuestion {
   type: 'point';
   instructions?: unknown;
-  /** The id of the image to look in; required when the request has two or more images. */
+  /**
+   * The id of the image to look in (a string), required when the request has two or
+   * more images. A reference by number ("Picture 2") goes in the instructions.
+   */
   image?: string;
   /** `pixels` (the API's default) or `normalized` (fractions of the width and height). */
   units?: PlaceUnits;
@@ -50,7 +53,10 @@ export interface PointQuestion {
 export interface BoxQuestion {
   type: 'box';
   instructions?: unknown;
-  /** The id of the image to look in; required when the request has two or more images. */
+  /**
+   * The id of the image to look in (a string), required when the request has two or
+   * more images. A reference by number ("Picture 2") goes in the instructions.
+   */
   image?: string;
   /** `pixels` (the API's default) or `normalized` (fractions of the width and height). */
   units?: PlaceUnits;
@@ -161,8 +167,9 @@ export type PlaceUnits = 'pixels' | 'normalized';
 
 /**
  * A point question: where in the image is it? Answered with `x` and `y`.
- * `image` is the id of the image to look in (required when the request has two
- * or more images); `image` and `units` are left out of the request when not given.
+ * `image` is the id of the image to look in (a string, required when the request
+ * has two or more images; a reference by number such as "Picture 2" goes in the
+ * instructions); `image` and `units` are left out of the request when not given.
  *
  * ```ts
  * point('Point to the yellow package closest to the robot arm.');

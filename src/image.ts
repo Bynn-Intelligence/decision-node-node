@@ -193,6 +193,11 @@ export interface LocalImage {
  * inline as base64; larger ones are uploaded (see the client's `inlineThreshold`).
  */
 export class Image {
+  /**
+   * The image's id, unique within a request. The model sees the image as
+   * "Picture <n>" (its place in the request's images, from 1) with this id beside
+   * it, so text in the state or the instructions can refer to it by either.
+   */
   readonly id: string;
   readonly path: string | undefined;
   readonly data: ImageBytes | undefined;

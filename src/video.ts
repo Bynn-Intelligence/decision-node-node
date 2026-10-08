@@ -87,8 +87,9 @@ export interface VideoOptions {
  * new Video('dock', [new VideoFrame(30, f0), new VideoFrame(30.5, f1)], { fps: 2 });
  * ```
  *
- * The id is unique across the request's images and videos; instructions can
- * refer to the video by it.
+ * The id is unique across the request's images and videos. The model sees the
+ * video as "Video <n>" (its place in the request's videos, from 1) with this id
+ * beside it, so text in the state or the instructions can refer to it by either.
  */
 export class Video {
   readonly id: string;
