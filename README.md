@@ -106,7 +106,7 @@ How a local image travels is chosen for you, for the fastest answer:
 
 Set `inlineThreshold` on the client to move the cut-off: `0` uploads every local image, a large value sends everything inline. `dn.upload(images)` uploads images whatever their size and returns their upload ids, for use later with `Image.fromUploadId`. No image is ever resized or re-encoded.
 
-Every image is checked before anything is sent: at most 4 per request, ids unique, URLs `https` and at most 2,048 characters, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
+Every image is checked before anything is sent: at most 4 per request, ids present and unique, URLs by the rules above that need no network, an upload id's media type one of the three, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
 
 ## The client
 
@@ -152,7 +152,22 @@ A `Decision` has `answers`, `model` (the version that answered), `usage.inputTok
 
 ### Checked before sending
 
-The client checks every request against the API's fixed rules before it sends anything, so a request the API would refuse costs no round trip: the images (see Images), a choice of 1 to 255 options, a score of 1 to 10 levels, a truth with instructions or criteria, a number with instructions and a grid of at most 4,096 values with `step` above 0 and `min` at most `max`. A fault throws the error the API would answer with: `BadRequestError`, or `ValidationError` for the faults the API answers with a 422 (a number grid that cannot be built, a score without levels). These errors have no `status` and no `requestId`, since no request was made. Token limits depend on the model version and stay the API's to judge. `decideRaw` sends its body exactly as given, unchecked.
+The client checks every request against every fixed rule the API documents before it sends anything, so a request the API would refuse costs no round trip and the server never sees it. A fault throws exactly what the API would answer: the same class, the same `errorType` and message, and for a 422 a `ValidationError` whose `entries` are the API's own list. These errors have no `status` and no `requestId`, since no request was made.
+
+| Rule | Thrown as |
+|---|---|
+| A question that is not an object, has no `type`, or has a field of the wrong type (`instructions`, a state, an option description, a score level or a truth side that is not a string, an object or an array; a choice without options as an object; a score without levels as a list) | `ValidationError`, the API's entries |
+| An unknown question type, or a `number` question on `systemone` | `BadRequestError`, `api_usage_error`, "Invalid request." |
+| A choice of no options or more than 255, a score of more than 10 levels, a truth with neither instructions nor criteria, a number without instructions | `BadRequestError` with the API's plain message and no `errorType` |
+| A number grid: `min`, `max` or `step` not a finite number, beyond 2^53, `step` not above 0, more than 6 decimals in `min` or `step`, beyond the bound that keeps every value exact, `min` above `max`, more than 4,096 values | `ValidationError`, the API's entries |
+| More than 128 objects and arrays inside each other | `BadRequestError`, `api_usage_error` |
+| Images (see Images); an image URL that is not `https` | `BadRequestError`, `api_usage_error` |
+| An `https` image URL over 2,048 characters, with user information, on a port other than 443, or naming a private, loopback, link-local or other reserved address literally | `BadRequestError`, `image_url_refused` |
+| A session's `window` outside 1 to 64 or `ttl_seconds` outside 1 to 3,600 | `ValidationError`, the API's entries |
+| A session frame (see Sessions) | `BadRequestError`, `api_usage_error` |
+| A batch request without a `customId`, an empty or repeated one, an `add` with no requests, a `batches.list` `offset` below 0 or `limit` outside 1 to 100 | `BadRequestError`, `api_usage_error` |
+
+Some limits are stated only by `/v1/models`: whether a model answers `number` questions or serves sessions, its largest session window, how many requests a batch holds and how long a `customId` may be. Once you have called `models()` on a client, it checks those against what it read, and a value `/v1/models` restates (such as the largest window) replaces the documented one; before that, those checks are left to the API. Token counts and anything that depends on the server's state, such as whether an upload is still live, stay the API's to judge. `decideRaw` sends its body exactly as given, unchecked.
 
 ### Your own `fetch`
 
@@ -247,7 +262,7 @@ await session.end();
 
 - `openSession` always sends a model. It is retried like a decision, except when the key already holds as many open sessions as it may: that `429` throws `SessionLimitError` (a `RateLimitError`) at once.
 - `connect()` sends your key in the handshake's `Authorization` header, never in the URL, together with the client's custom headers. A refused handshake rejects with `SessionClosed`. After a close with code `1013` (the server was busy), call `connect()` again: the session is kept.
-- `send()` numbers frames from 1 unless you pass `seq`, and resolves once the frame is on the socket, without waiting for its reply. Frames go out in the order you send them. A frame's image follows the rules under Images: small ones inline, large or already uploaded ones by upload id. Frames take no image URLs.
+- `send()` numbers frames from 1 unless you pass `seq`, and resolves once the frame is on the socket, without waiting for its reply. A frame that breaks a fixed rule (no `frame` and no `image`, an empty `frame`, an empty or unknown `questions` list, a `seq` out of range, an image URL, an image that breaks the image rules) is refused by `send()` itself with a `BadRequestError`: nothing is written and it takes no `seq`. Frames go out in the order you send them. A frame's image follows the rules under Images: small ones inline, large or already uploaded ones by upload id. Frames take no image URLs.
 - `replies()` yields `Reply` and `FrameError` values and ends with the `SessionClosed`. A frame error is a value, never thrown: the session goes on. `next({ timeout })` reads one event.
 - `end()` ends the session and closes the socket; a session that has already ended counts as ended. Pings are answered automatically.
 
@@ -342,7 +357,7 @@ try {
 
 Each attempt times out after 10 seconds, counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors. The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404 and 422 are never retried. A decision changes nothing on the server, so a retry is always safe.
 
-An upload to storage is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. Batch results stream in, and each read of the stream must bring data within the timeout.
+An upload to storage is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. A `403` after the upload URL's 5 minutes have passed, by the client's clock, gets a fresh URL once; a second such `403` is thrown. Batch results stream in, and each read of the stream must bring data within the timeout.
 
 ## Safety
 
@@ -391,6 +406,7 @@ Limits differ by model version; `models()` returns each model's published limits
 | Base URL | `baseUrl` | `DECISIONNODE_BASE_URL` | `https://api.decisionnode.com` |
 | Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-latest` |
 | Inline threshold | `inlineThreshold` | | `DEFAULT_INLINE_THRESHOLD`, 524,288 bytes |
+| Clock | `clock` | | `Date.now`; the time, in epoch milliseconds, that upload URLs and cached uploads are judged by |
 
 The client sends no telemetry and contacts nothing but the base URL, and the storage URLs the API returns for an upload. Besides your key, your own headers and the content headers, the only header it sends to the API is `User-Agent: decisionnode-node/<version>`. To see each attempt, pass `logger: (line) => console.debug(line)`: it prints the method, path, status, request id and time, never the state, the questions or the key.
 
