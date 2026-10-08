@@ -118,6 +118,7 @@ const dn = new DecisionNode({
   timeout: 10_000,              // milliseconds per attempt, above 0
   maxRetries: 2,                // retries after the first attempt, 0 or more
   inlineThreshold: 524_288,     // bytes; local images under it go inline, see Images
+  uploadTimeout: 60_000,        // milliseconds per storage PUT of an upload, apart from timeout
   headers: { 'x-team': 'support' },
   fetch: customFetch,           // default: the global fetch
   fetchHonoursManualRedirect: true, // required with fetch, see below
@@ -140,6 +141,7 @@ The base URL must use `https`; `http` is accepted only for `localhost`, `127.0.0
 | `gate({ action, context, images, model })` | `Decision` with `risk`, `touches_production` and `verdict` |
 | `models()` | `ModelInfo[]` with each model's published limits |
 | `upload(images)` | The upload id of each image |
+| `checkRequest(method, request)` | Nothing: runs a call's local checks without sending |
 | `openSession({ questions, state, instructions, model, window, ttlSeconds })` | `Session` |
 | `supervise(body, feed, onReply)` | The last `SessionClosed`, or `null` |
 | `batches.create`, `add`, `finalize`, `get`, `list`, `results`, `cancel` | `Batch`, `BatchPage`, `BatchResults` |
@@ -167,7 +169,17 @@ The client checks every request against every fixed rule the API documents befor
 | A session frame (see Sessions) | `BadRequestError`, `api_usage_error` |
 | A batch request without a `customId`, an empty or repeated one, an `add` with no requests, a `batches.list` `offset` below 0 or `limit` outside 1 to 100 | `BadRequestError`, `api_usage_error` |
 
-Some limits are stated only by `/v1/models`: whether a model answers `number` questions or serves sessions, its largest session window, how many requests a batch holds and how long a `customId` may be. Once you have called `models()` on a client, it checks those against what it read, and a value `/v1/models` restates (such as the largest window) replaces the documented one; before that, those checks are left to the API. Token counts and anything that depends on the server's state, such as whether an upload is still live, stay the API's to judge. `decideRaw` sends its body exactly as given, unchecked.
+Some limits are stated only by `/v1/models`: whether a model answers `number` questions or serves sessions, its largest session window, how many requests a batch holds and how long a `customId` may be. Once you have called `models()` on a client, it checks those against what it read, and a value `/v1/models` restates (such as the largest window) replaces the documented one; before that, those checks are left to the API. A request's model is matched to an entry by its name, else by the entry that states that name as its `alias` or its pinned `version`, so `decisionnode-latest` finds the limits of the version it stands for; a name the list does not state is left to the API. Token counts and anything that depends on the server's state, such as whether an upload is still live, stay the API's to judge. `decideRaw` sends its body exactly as given, unchecked.
+
+To check a request without sending it, for example to validate input from a form before you queue it, pass the same arguments to `checkRequest`. It runs every check the call would run, with the limits held from `models()`, and throws the same error; it sends nothing and uploads nothing, and resolves when the request would be sent:
+
+```ts
+await dn.checkRequest('decide', { state, questions, images });
+await dn.checkRequest('systemone', { state, questions });
+await dn.checkRequest('openSession', { questions, window: 8 });
+await dn.checkRequest('batches.create', requests); // or 'batches.add'
+await session.checkFrame({ frame: reading, questions: ['abort'] });
+```
 
 ### Your own `fetch`
 
@@ -263,6 +275,7 @@ await session.end();
 - `openSession` always sends a model. It is retried like a decision, except when the key already holds as many open sessions as it may: that `429` throws `SessionLimitError` (a `RateLimitError`) at once.
 - `connect()` sends your key in the handshake's `Authorization` header, never in the URL, together with the client's custom headers. A refused handshake rejects with `SessionClosed`. After a close with code `1013` (the server was busy), call `connect()` again: the session is kept.
 - `send()` numbers frames from 1 unless you pass `seq`, and resolves once the frame is on the socket, without waiting for its reply. A frame that breaks a fixed rule (no `frame` and no `image`, an empty `frame`, an empty or unknown `questions` list, a `seq` out of range, an image URL, an image that breaks the image rules) is refused by `send()` itself with a `BadRequestError`: nothing is written and it takes no `seq`. Frames go out in the order you send them. A frame's image follows the rules under Images: small ones inline, large or already uploaded ones by upload id. Frames take no image URLs.
+- `checkFrame()` runs the same checks as `send()` without writing anything.
 - `replies()` yields `Reply` and `FrameError` values and ends with the `SessionClosed`. A frame error is a value, never thrown: the session goes on. `next({ timeout })` reads one event.
 - `end()` ends the session and closes the socket; a session that has already ended counts as ended. Pings are answered automatically.
 
@@ -279,6 +292,19 @@ const closed = await dn.supervise(body, readings(), (event) => console.log(event
 It opens and connects a session, sends each reading, hands every reply and frame error to your callback, and reopens when a session ends with a reopen code: at once after `4408` (idle) and `4410` (expired), after a backoff of 1 to 30 seconds with jitter after the others, and on `1013` it connects to the same session again. It stops on any other code and returns that `SessionClosed`. When the feed ends it waits for the replies still owed, ends the session, and returns the last `SessionClosed`, or `null`.
 
 Sessions need a WebSocket that can send an `Authorization` header: Node 22 and later, Deno and Bun have one, and on Node 20 the client uses the `ws` package, installed with it as an optional dependency. Browsers cannot send that header, so `connect()` throws a `TypeError` there; open sessions from your server.
+
+#### Proxies and certificates
+
+The session's socket goes through the same proxy and trusts the same certificates as the client's requests wherever the runtime allows it. Options for the socket alone go in the client's `webSocketOptions`; it may not turn certificate checks off.
+
+| Runtime | Proxy | Custom certificate authority |
+|---|---|---|
+| Node 22 and later | The process's global dispatcher, which `fetch` uses too: set an undici `ProxyAgent` with `setGlobalDispatcher` and both follow it. `webSocketOptions: { dispatcher }` sets one for the socket alone | `NODE_EXTRA_CA_CERTS`, or the `connect.ca` of the dispatcher |
+| Node 20 (`ws`) | `webSocketOptions: { agent }`, an HTTP agent that tunnels through your proxy; the global dispatcher does not reach `ws` | `NODE_EXTRA_CA_CERTS`, or `webSocketOptions: { ca }` |
+| Bun | `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, which Bun's `fetch` reads, are handed to the socket too; `webSocketOptions: { proxy }` sets one for the socket alone. Needs a Bun version whose WebSocket takes `proxy` | `webSocketOptions: { tls: { ca } }` |
+| Deno | `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` apply to the socket as to `fetch` | `--cert` or `DENO_CERT`, as for `fetch` |
+
+When you pass your own `fetch`, the client cannot see what proxy it uses: configure the socket's with the global settings above or `webSocketOptions`.
 
 ## Batches
 
@@ -312,7 +338,7 @@ The steps are also available one by one on `dn.batches`:
 
 Requests are sent as JSON Lines; each line always carries a model (the request's, else the client's), and a missing state is sent as empty. Every request is checked before anything is sent, as for `decide`, and its local images go inline or by upload id by the same threshold, counted per line. A `Batch` has every field of the API's batch object: `id`, `state`, `counters`, `createdAt`, `finalizedAt`, `expiresAt`, `endedAt`, `resultsUrl`, `resultsExpireAt`, `priceFactor`, `usage`, `error`, and `raw`.
 
-`results()` returns `BatchResults`: iterate it once with `for await`, or call `toArray()`. Each `BatchResult` has `customId`, `status` (the line's HTTP status, or `expired` or `cancelled` for a line that never ran), `headers`, and either `decision` (a `Decision` for a `200` line, numbers exactly as sent) or `error` (the error that status and body give, as a value, never thrown).
+`results()` returns `BatchResults`: iterate it once with `for await`, or call `toArray()`. It reads the whole results file as it downloads, line by line, however many lines it has; nothing is paged and the file is never held whole in memory unless you collect it. Each `BatchResult` has `customId`, `status` (the line's HTTP status, or `expired` or `cancelled` for a line that never ran), `headers`, and either `decision` (a `Decision` for a `200` line, numbers exactly as sent) or `error` (the error that status and body give, as a value, never thrown).
 
 Creating, adding and finalizing are retried only when the API answers `429` or `529`, since it applied nothing then; never after a timeout or a lost answer, which could create a second draft or add lines twice. A finalize answered `409` because an earlier, lost attempt went through returns the batch.
 
@@ -357,7 +383,7 @@ try {
 
 Each attempt times out after 10 seconds, counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors. The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404 and 422 are never retried. A decision changes nothing on the server, so a retry is always safe.
 
-An upload to storage is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. A `403` after the upload URL's 5 minutes have passed, by the client's clock, gets a fresh URL once; a second such `403` is thrown. Batch results stream in, and each read of the stream must bring data within the timeout.
+Each storage PUT of an upload has its own timeout, `uploadTimeout` (60 seconds by default), apart from `timeout`, since a large image on a slow uplink needs longer than a decision. It is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. A `403` after the upload URL's 5 minutes have passed, by the client's clock, gets a fresh URL once; a second such `403` is thrown. Batch results stream in, and each read of the stream must bring data within the timeout.
 
 ## Safety
 
@@ -406,6 +432,7 @@ Limits differ by model version; `models()` returns each model's published limits
 | Base URL | `baseUrl` | `DECISIONNODE_BASE_URL` | `https://api.decisionnode.com` |
 | Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-latest` |
 | Inline threshold | `inlineThreshold` | | `DEFAULT_INLINE_THRESHOLD`, 524,288 bytes |
+| Upload timeout | `uploadTimeout` | | `DEFAULT_UPLOAD_TIMEOUT`, 60,000 milliseconds per storage PUT |
 | Clock | `clock` | | `Date.now`; the time, in epoch milliseconds, that upload URLs and cached uploads are judged by |
 
 The client sends no telemetry and contacts nothing but the base URL, and the storage URLs the API returns for an upload. Besides your key, your own headers and the content headers, the only header it sends to the API is `User-Agent: decisionnode-node/<version>`. To see each attempt, pass `logger: (line) => console.debug(line)`: it prints the method, path, status, request id and time, never the state, the questions or the key.
