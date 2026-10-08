@@ -168,9 +168,6 @@ function quoted(id: string): string {
  */
 export function checkVideos(videos: ReadonlyArray<Record<string, unknown>>, images: readonly unknown[] | null | undefined): void {
   if (videos.length === 0) return;
-  if (videos.length > MAX_VIDEOS) {
-    throw localError(BadRequestError, `Too many videos: ${videos.length}, the limit is ${MAX_VIDEOS}.`);
-  }
   const seen = new Set<string>();
   for (const img of images ?? []) {
     const id = img instanceof Image ? img.id : img !== null && typeof img === 'object' ? (img as { id?: unknown }).id : undefined;

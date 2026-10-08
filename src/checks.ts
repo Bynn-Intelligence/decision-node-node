@@ -49,7 +49,7 @@ export interface Entry {
   ctx?: Record<string, unknown>;
 }
 
-function entry(type: string, loc: Array<string | number>, msg: string, input: unknown, ctx?: Record<string, unknown>): Entry {
+export function entry(type: string, loc: Array<string | number>, msg: string, input: unknown, ctx?: Record<string, unknown>): Entry {
   const e: Entry = { type, loc: [...loc], msg, input };
   if (ctx !== undefined) e.ctx = ctx;
   return e;
@@ -420,7 +420,8 @@ function checkQuestion(
  * limit, then every 422 entry (the state, each question), then the first 400
  * in question order. `extra` are 422 entries found before (a session's fields).
  * `imageIds` are the request's image ids, for the point and box rules; `null`
- * where the request carries no images of its own.
+ * where the request carries no images of its own. `tail` are 422 entries listed
+ * after the questions' (the image and video counts).
  */
 export function checkRequest(
   body: Record<string, unknown>,
@@ -428,6 +429,7 @@ export function checkRequest(
   limits: HeldLimits = {},
   extra: Entry[] = [],
   imageIds: readonly unknown[] | null = null,
+  tail: Entry[] = [],
 ): void {
   checkNesting(body);
   const entries: Entry[] = [...extra];
@@ -436,6 +438,7 @@ export function checkRequest(
   if (present(state) && !isSdl(state)) entries.push(...sdlEntries(['body', 'state'], state));
   const questions = isObject(body.questions) ? body.questions : {};
   for (const [id, q] of Object.entries(questions)) checkQuestion(id, q, entries, deferred, profile, limits, imageIds);
+  entries.push(...tail);
   if (entries.length > 0) throw localValidation(entries);
   if (deferred.length > 0) throw deferred[0]!;
 }

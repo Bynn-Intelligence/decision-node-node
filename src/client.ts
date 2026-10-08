@@ -11,7 +11,7 @@ import {
 } from './answers.js';
 import { Batches, CHECK_REQUESTS, type BatchRequest, type BatchRun, type RunBatchOptions } from './batches.js';
 import { checkRequest, checkSessionOpen, type HeldLimits } from './checks.js';
-import { BadRequestError, DecisionNodeError, ServerError } from './errors.js';
+import { BadRequestError, DecisionNodeError, ServerError, localError } from './errors.js';
 import { Image } from './image.js';
 import type { VideoInput } from './video.js';
 import { choice, number as numberQuestion, score as scoreQuestion, truth, type Questions } from './questions.js';
@@ -38,7 +38,7 @@ import {
   type RawResponse,
   type SleepFn,
 } from './transport.js';
-import { DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT, ImagePlacer, STALE_UPLOAD, type ImageInput } from './uploads.js';
+import { DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT, ImagePlacer, MAX_UPLOAD_FILES, STALE_UPLOAD, type ImageInput } from './uploads.js';
 
 export { DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT };
 export type { ClockFn, FetchLike, ImageInput, SleepFn };
@@ -611,6 +611,10 @@ export class DecisionNode {
       if (!(img instanceof Image) || !img.isLocal) {
         throw new TypeError('upload takes images of local bytes: a path, bytes or base64');
       }
+    }
+    if (images.length > MAX_UPLOAD_FILES) {
+      // One presign takes 1 to 16 files: that call's own 400, before anything is sent.
+      throw localError(BadRequestError, `files: 1 to ${MAX_UPLOAD_FILES} files, got ${images.length}.`);
     }
     const plan = await this.#placer.check(images, this.#limits());
     if (plan === null) return [];

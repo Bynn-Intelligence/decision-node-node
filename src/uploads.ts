@@ -8,7 +8,7 @@
 import { BadRequestError, ConnectionError, DecisionNodeError, ServerError, TimeoutError, localError } from './errors.js';
 import { hex, md5, sha256 } from './hash.js';
 import { heldNumber } from './checks.js';
-import { Image, MAX_IMAGES, MAX_IMAGE_BYTES, checkImageUrl, toBase64, type LocalImage, type WireImage } from './image.js';
+import { Image, MAX_IMAGE_BYTES, checkImageUrl, toBase64, type LocalImage, type WireImage } from './image.js';
 import { backoffSeconds, isLoopbackHost, isSuccess, serialise, type Transport } from './transport.js';
 
 /** Milliseconds one storage PUT attempt may take, apart from the API attempt's timeout. */
@@ -16,6 +16,9 @@ export const DEFAULT_UPLOAD_TIMEOUT = 60_000;
 
 /** Local images of one request totalling under this many bytes go inline as base64; at or above it they are uploaded. */
 export const DEFAULT_INLINE_THRESHOLD = 524_288;
+
+/** The most files one `POST /v1/uploads` takes, so the most images one `upload()` call takes. */
+export const MAX_UPLOAD_FILES = 16;
 
 /** At most this many uploads are remembered per client, least recently used out first. */
 const CACHE_ENTRIES = 256;
@@ -64,8 +67,7 @@ export class ImagePlacer {
   }
 
   /**
-   * The local checks of a request's images, before anything is sent: at most
-   * 16, ids present and unique, URLs by the rules that need no network, an
+   * The local checks of a request's images, before anything is sent: ids present and unique, URLs by the rules that need no network, an
    * upload reference's media type, local bytes of a known format within the
    * size and pixel limits. `limits` are the model's published limits when the
    * client holds them.
@@ -74,11 +76,8 @@ export class ImagePlacer {
     if (images === undefined || images === null) return null;
     if (!Array.isArray(images)) throw new TypeError('images must be an array');
     if (images.length === 0) return null;
-    const most = heldNumber(limits, 'max_images', MAX_IMAGES);
+    // Their count is a 422 entry of the request (countEntries in request.ts).
     const biggest = heldNumber(limits, 'max_image_bytes', MAX_IMAGE_BYTES);
-    if (images.length > most) {
-      throw localError(BadRequestError, `Too many images: ${images.length}, the limit is ${most}.`);
-    }
     const ids = new Set<string>();
     const slots: ImagePlan['slots'] = [];
     for (const [i, img] of images.entries()) {

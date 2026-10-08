@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { BadRequestError, Decision, DecisionNode, Image, SPEC_VERSION, Video, VideoFrame, truth } from '../../src/index.js';
+import { BadRequestError, Decision, DecisionNode, Image, SPEC_VERSION, ValidationError, Video, VideoFrame, truth } from '../../src/index.js';
 import { formatG } from '../../src/video.js';
 import { fakeFetch, type Reply } from './helpers.js';
 
@@ -112,7 +112,6 @@ describe('videos in requests', () => {
   });
 
   it.each([
-    ['five videos', Array.from({ length: 5 }, (_, i) => new Video(`v${i}`, frames(0))), [], 'Too many videos: 5, the limit is 4.'],
     ['an empty id', [new Video('', frames(0))], [], 'Video 0 needs an id.'],
     ['a repeated id', [new Video('cam', frames(0)), new Video('cam', frames(0))], [], "Video id 'cam' is used twice (ids are unique across images and videos)."],
     ['an image id', [new Video('gate', frames(0))], [Image.fromUrl('gate', 'https://e.com/g.jpg')], "Video id 'gate' is used twice (ids are unique across images and videos)."],
@@ -137,6 +136,21 @@ describe('videos in requests', () => {
     await expect(dn.checkRequest('decide', { questions: Q, images: images as Image[], videos })).rejects.toBeInstanceOf(BadRequestError);
   });
 
+  it('refuses a fifth video with the API 422 too_long, after the question entries', async () => {
+    const { dn, calls } = client();
+    const videos = Array.from({ length: 5 }, (_, i) => new Video(`v${i}`, frames(0)));
+    const err = await dn.decide({ questions: { q: { type: 'choice', instructions: '?' } }, videos }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ValidationError);
+    const entries = (err as ValidationError).entries as Array<Record<string, unknown>>;
+    expect(entries.map((e) => [e.type, e.loc])).toEqual([
+      ['missing', ['body', 'questions', 'q', 'choice', 'criteria']],
+      ['too_long', ['body', 'videos']],
+    ]);
+    expect(entries[1]!.input).toEqual(videos.map((v) => v.toJSON()));
+    expect(entries[1]!.ctx).toEqual({ field_type: 'List', max_length: 4, actual_length: 5 });
+    expect(calls).toHaveLength(0);
+  });
+
   it('leaves frame counts and a frame bytes against its type to the server', async () => {
     const { dn, calls } = client();
     const many = new Video('cam', frames(...Array.from({ length: 200 }, (_, i) => i * 0.25)), { fps: 4 });
@@ -153,7 +167,13 @@ describe('videos in requests', () => {
     const err = await dn
       .decide({ questions: Q, images: [...images, Image.fromUrl('x', 'https://e.com/x.jpg')] })
       .catch((e: unknown) => e);
-    expect((err as BadRequestError).message).toBe('Too many images: 17, the limit is 16.');
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(((err as ValidationError).entries as Array<Record<string, unknown>>)[0]!.ctx).toEqual({ field_type: 'List', max_length: 16, actual_length: 17 });
+    const refused = await dn.upload([...images, Image.fromBytes('y', PNG)]).catch((e: unknown) => e);
+    expect([(refused as BadRequestError).message, (refused as BadRequestError).errorType]).toEqual([
+      'files: 1 to 16 files, got 17.',
+      'api_usage_error',
+    ]);
     expect(calls).toHaveLength(1);
   });
 

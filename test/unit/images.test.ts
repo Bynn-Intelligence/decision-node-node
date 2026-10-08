@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { BadRequestError, DecisionNode, Image, MAX_IMAGE_BYTES, imageDimensions, sniffMediaType, truth } from '../../src/index.js';
+import { BadRequestError, DecisionNode, Image, MAX_IMAGE_BYTES, ValidationError, imageDimensions, sniffMediaType, truth } from '../../src/index.js';
 import { fromBase64, isBlockedAddress, toBase64 } from '../../src/image.js';
 import { OK_TRUTH, fakeFetch } from './helpers.js';
 
@@ -108,7 +108,6 @@ describe('local image checks', () => {
     ['an IPv4-mapped private address', [Image.fromUrl('u', 'https://[::ffff:192.168.0.1]/a.jpg')], /private address/],
     ['a NAT64 loopback', [Image.fromUrl('u', 'https://[64:ff9b::7f00:1]/a.jpg')], /private address/],
     ['an upload reference of another type', [Image.fromUploadId('r', 'upl_0', 'image/gif')], /media_type must be/],
-    ['seventeen images', Array.from({ length: 17 }, (_, i) => Image.fromUrl(`u${i}`, 'https://example.com/a.jpg')), /^Too many images: 17, the limit is 16\.$/],
     ['repeated ids', [Image.fromUrl('a', 'https://example.com/1.jpg'), Image.fromUrl('a', 'https://example.com/2.jpg')], /Duplicate image id/],
   ])('refuses %s with BadRequestError and sends nothing', async (_name, images, message) => {
     const { err, calls } = await decideWith(images);
@@ -116,6 +115,23 @@ describe('local image checks', () => {
     expect((err as BadRequestError).message).toMatch(message);
     expect((err as BadRequestError).status).toBeNull();
     expect((err as BadRequestError).requestId).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses a seventeenth image with the API 422 too_long and sends nothing', async () => {
+    const urls = Array.from({ length: 17 }, (_, i) => Image.fromUrl(`u${i}`, 'https://example.com/a.jpg'));
+    const { err, calls } = await decideWith([...urls.slice(0, 16), Image.fromBytes('local', fixture('5x3.png'))]);
+    expect(err).toBeInstanceOf(ValidationError);
+    expect((err as ValidationError).status).toBeNull();
+    expect((err as ValidationError).entries).toEqual([
+      {
+        type: 'too_long',
+        loc: ['body', 'images'],
+        msg: 'List should have at most 16 items after validation, not 17',
+        input: [...urls.slice(0, 16).map((u) => ({ id: u.id, url: 'https://example.com/a.jpg' })), { id: 'local', media_type: 'image/png' }],
+        ctx: { field_type: 'List', max_length: 16, actual_length: 17 },
+      },
+    ]);
     expect(calls).toHaveLength(0);
   });
 
