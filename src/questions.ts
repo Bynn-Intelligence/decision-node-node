@@ -24,13 +24,25 @@ export interface ScoreQuestion {
   criteria: readonly unknown[] | { readonly [index: string]: unknown };
 }
 
+/**
+ * A value read from an ordered grid: `min` to `max` in steps of `step`. A
+ * field left out takes the server's default (0, 255 and 1).
+ */
+export interface NumberQuestion {
+  type: 'number';
+  instructions?: unknown;
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
 /** A question of a type this SDK version does not know, sent as given. */
 export interface OtherQuestion {
   type: string;
   [field: string]: unknown;
 }
 
-export type Question = TruthQuestion | ChoiceQuestion<string> | ScoreQuestion | OtherQuestion;
+export type Question = TruthQuestion | ChoiceQuestion<string> | ScoreQuestion | NumberQuestion | OtherQuestion;
 
 /** Questions by id. The id is yours: it comes back as the answer's key, unchanged. */
 export type Questions = { readonly [id: string]: Question };
@@ -96,4 +108,23 @@ export function score(instructions: unknown, levels: readonly unknown[]): ScoreQ
     return { type: 'score', instructions, criteria };
   }
   return { type: 'score', criteria };
+}
+
+/**
+ * A value read from an ordered grid of numbers.
+ *
+ * @param instructions What to count or read. Required by the API.
+ * @param min The lowest value (default 0 on the server).
+ * @param max The highest value the grid may reach (default 255).
+ * @param step The spacing, above 0 (default 1).
+ *
+ * An argument left out is left out of the wire form, so the server's default applies.
+ */
+export function number(instructions: unknown, min?: number | null, max?: number | null, step?: number | null): NumberQuestion {
+  const q: NumberQuestion = { type: 'number' };
+  if (instructions !== undefined && instructions !== null) q.instructions = instructions;
+  if (min !== undefined && min !== null) q.min = min;
+  if (max !== undefined && max !== null) q.max = max;
+  if (step !== undefined && step !== null) q.step = step;
+  return q;
 }

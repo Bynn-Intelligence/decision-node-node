@@ -98,6 +98,12 @@ export class RateLimitError extends DecisionNodeError {
   }
 }
 
+/**
+ * 429 `session_limit_exceeded`: the key holds as many open sessions as it may.
+ * Never retried, since the count frees when a session ends, not when time passes.
+ */
+export class SessionLimitError extends RateLimitError {}
+
 /** 529: the service is overloaded. */
 export class OverloadedError extends DecisionNodeError {
   /** Seconds the server asked to wait (at most 60), or `null`. */
@@ -130,6 +136,7 @@ for (const [name, cls] of Object.entries({
   NotFoundError,
   ValidationError,
   RateLimitError,
+  SessionLimitError,
   OverloadedError,
   ServerError,
   ConnectionError,
@@ -204,8 +211,23 @@ export function errorFromResponse(status: number, headers: Record<string, string
   }
   if (status === 404) return new NotFoundError(message, fields);
   if (status === 422) return new ValidationError(message, { ...fields, entries });
+  if (status === 429 && errorType === 'session_limit_exceeded') {
+    return new SessionLimitError(message, { ...fields, retryAfter: retryAfterSeconds(headers) });
+  }
   if (status === 429) return new RateLimitError(message, { ...fields, retryAfter: retryAfterSeconds(headers) });
   if (status === 529) return new OverloadedError(message, { ...fields, retryAfter: retryAfterSeconds(headers) });
   if (status >= 500 && status <= 599) return new ServerError(message, fields);
   return new DecisionNodeError(message, fields);
+}
+
+/**
+ * A fault in the request's content found before anything was sent: the API's
+ * own class and `error_type`, with no status and no request id.
+ */
+export function localError<E extends DecisionNodeError>(
+  cls: new (message: string, fields?: ErrorFields) => E,
+  message: string,
+  errorType: string | null = 'api_usage_error',
+): E {
+  return new cls(message, { errorType });
 }

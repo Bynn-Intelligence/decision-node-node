@@ -2,9 +2,12 @@ import { parseSafety, type Safety } from './safety.js';
 
 type RawAnswer = Record<string, unknown>;
 
+/** The wire name some paths still use for a `truth` answer. */
+const LEGACY_TRUTH = 'noul';
+
 /** The base of every answer: its `type` and the answer object as parsed. */
 export class Answer {
-  /** The answer's type as sent: `truth`, `choice`, `score`, or a newer one. */
+  /** The answer's type: `truth`, `choice`, `score`, `number`, or a newer one as sent. */
   readonly type: string;
   /** The answer object exactly as parsed from the response. */
   readonly raw: RawAnswer;
@@ -15,7 +18,11 @@ export class Answer {
   }
 }
 
-/** The answer to a `truth` question. */
+/**
+ * The answer to a `truth` question. `type` is always `truth`; an answer the
+ * server sent under its older wire name is read the same way, and `raw` keeps
+ * it as sent.
+ */
 export class TruthAnswer extends Answer {
   declare readonly type: 'truth';
   /** The probability that the statement is true, 0 to 1. */
@@ -23,7 +30,32 @@ export class TruthAnswer extends Answer {
 
   constructor(raw: RawAnswer) {
     super(raw);
-    this.truth = raw.truth as number;
+    (this as { type: string }).type = 'truth';
+    this.truth = (raw.type === 'truth' ? raw.truth : raw[LEGACY_TRUTH]) as number;
+  }
+}
+
+/** The answer to a `number` question. */
+export class NumberAnswer extends Answer {
+  declare readonly type: 'number';
+  /** The most probable value of the grid, exactly as sent (`7`, `3.5`). */
+  readonly number: number;
+  /** The probability-weighted mean over the grid, as sent. */
+  readonly expected: number;
+  /** The probability of `number`. */
+  readonly confidence: number;
+  /**
+   * Probability by grid value, keyed by the value exactly as the server wrote
+   * it (`"7"`, `"3.5"`), in the order sent. Sort numerically when you need order.
+   */
+  readonly probabilities: Record<string, number>;
+
+  constructor(raw: RawAnswer) {
+    super(raw);
+    this.number = raw.number as number;
+    this.expected = raw.expected as number;
+    this.confidence = raw.confidence as number;
+    this.probabilities = Object.fromEntries(Object.entries((raw.probabilities ?? {}) as Record<string, number>));
   }
 }
 
@@ -105,6 +137,10 @@ function wellFormed(r: RawAnswer): boolean {
   switch (r.type) {
     case 'truth':
       return isNumber(r.truth);
+    case LEGACY_TRUTH:
+      return isNumber(r[LEGACY_TRUTH]);
+    case 'number':
+      return isNumber(r.number) && isNumber(r.expected) && isNumber(r.confidence) && isNumberMap(r.probabilities);
     case 'choice':
       return typeof r.choice === 'string' && isNumber(r.confidence) && isNumberMap(r.probabilities);
     case 'score':
@@ -130,7 +166,10 @@ export function parseAnswer(raw: unknown): Answer {
   if (!wellFormed(r)) return new UnknownAnswer(r);
   switch (r.type) {
     case 'truth':
+    case LEGACY_TRUTH:
       return new TruthAnswer(r);
+    case 'number':
+      return new NumberAnswer(r);
     case 'choice':
       return new ChoiceAnswer(r);
     default:
@@ -141,13 +180,15 @@ export function parseAnswer(raw: unknown): Answer {
 type OptionNames<C> = C extends readonly unknown[] ? string : string extends keyof C ? string : keyof C & string;
 
 /** The answer type a question produces. */
-export type AnswerFor<Q> = Q extends { type: 'truth' }
+export type AnswerFor<Q> = Q extends { type: 'truth' | 'noul' }
   ? TruthAnswer
   : Q extends { type: 'choice'; criteria: infer C }
     ? ChoiceAnswer<OptionNames<C>>
     : Q extends { type: 'score' }
       ? ScoreAnswer
-      : Answer;
+      : Q extends { type: 'number' }
+        ? NumberAnswer
+        : Answer;
 
 /** Answers by question id, typed from the questions. */
 export type AnswersFor<Q> = { -readonly [K in keyof Q]: AnswerFor<Q[K]> };
@@ -207,6 +248,27 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
  */
 export type DecisionResult<A extends Record<string, Answer> = Record<string, Answer>> = Decision<A> | Error;
 
+/** Session limits of a model, as `/v1/models` publishes them. */
+export interface ModelSessions {
+  enabled: boolean;
+  max_per_key: number;
+  default_window: number;
+  max_window: number;
+  default_ttl_seconds: number;
+  max_ttl_seconds: number;
+  idle_timeout_seconds: number;
+  max_frame_tokens: number;
+  max_frame_images: number;
+  window_tokens: number;
+  max_prefix_tokens: number;
+  [field: string]: unknown;
+}
+
+function field<T>(raw: Record<string, unknown>, name: string, check: (v: unknown) => boolean): T | null {
+  const v = raw[name];
+  return check(v) ? (v as T) : null;
+}
+
 /** One entry of `models()`. */
 export class ModelInfo {
   /** The model id to send, for example `decisionnode-latest`. */
@@ -216,6 +278,24 @@ export class ModelInfo {
   readonly releaseDate: string;
   /** Every other field of the entry: the model's published limits, wire names as sent. */
   readonly limits: Record<string, unknown>;
+  /** Grid values a `number` question answers as one question. `null` when not published. */
+  readonly numberOneQuestionValues: number | null;
+  /** The most values a `number` grid may hold. */
+  readonly numberMaxGridValues: number | null;
+  /** `[min, max]` of a `number` question that sets neither. */
+  readonly numberDefaultRange: [number, number] | null;
+  /** `step` of a `number` question that sets none. */
+  readonly numberDefaultStep: number | null;
+  /** The largest image an upload takes, in bytes. */
+  readonly uploadMaxBytes: number | null;
+  /** How long an upload can be named, in seconds. */
+  readonly uploadTtlSeconds: number | null;
+  /** The media types an upload takes. */
+  readonly uploadMediaTypes: string[] | null;
+  /** Session limits, as published. */
+  readonly sessions: ModelSessions | null;
+  /** Batch limits, wire names as published. */
+  readonly batch: Record<string, unknown> | null;
   /** The entry as parsed. */
   readonly raw: Record<string, unknown>;
 
@@ -227,5 +307,14 @@ export class ModelInfo {
     this.limits = Object.fromEntries(
       Object.entries(raw).filter(([k]) => k !== 'name' && k !== 'description' && k !== 'release_date'),
     );
+    this.numberOneQuestionValues = field(raw, 'number_one_question_values', isNumber);
+    this.numberMaxGridValues = field(raw, 'number_max_grid_values', isNumber);
+    this.numberDefaultRange = field(raw, 'number_default_range', (v) => Array.isArray(v) && v.length === 2 && v.every(isNumber));
+    this.numberDefaultStep = field(raw, 'number_default_step', isNumber);
+    this.uploadMaxBytes = field(raw, 'upload_max_bytes', isNumber);
+    this.uploadTtlSeconds = field(raw, 'upload_ttl_seconds', isNumber);
+    this.uploadMediaTypes = field(raw, 'upload_media_types', (v) => Array.isArray(v) && v.every((x) => typeof x === 'string'));
+    this.sessions = field(raw, 'sessions', isObject);
+    this.batch = field(raw, 'batch', isObject);
   }
 }

@@ -20,9 +20,11 @@ export {
 } from './client.js';
 export {
   choice,
+  number,
   score,
   truth,
   type ChoiceQuestion,
+  type NumberQuestion,
   type OtherQuestion,
   type Question,
   type Questions,
@@ -34,6 +36,7 @@ export {
   ChoiceAnswer,
   Decision,
   ModelInfo,
+  NumberAnswer,
   ScoreAnswer,
   TruthAnswer,
   UnknownAnswer,
@@ -41,6 +44,7 @@ export {
   type AnswerFor,
   type AnswersFor,
   type DecisionResult,
+  type ModelSessions,
   type Usage,
 } from './answers.js';
 export { Image, sniffMediaType, type ImageBytes, type ImageMediaType, type ImageSource, type WireImage } from './image.js';
@@ -58,6 +62,7 @@ export {
   RateLimitError,
   RefusalError,
   ServerError,
+  SessionLimitError,
   TimeoutError,
   ValidationError,
   MAX_RETRY_AFTER_SECONDS,
