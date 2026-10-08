@@ -50,6 +50,8 @@ Answer types follow from the questions: `d.answers.escalate` is a `TruthAnswer`,
 | `choice(instructions, options)` | `ChoiceAnswer` | `choice`, `confidence`, `probabilities` by option name |
 | `score(instructions, levels)` | `ScoreAnswer` | `score` (expected level index), `confidence`, `probabilities` and `legend` by level index |
 | `number(instructions, min?, max?, step?)` | `NumberAnswer` | `number` (the most probable value), `expected` (the mean), `confidence`, `probabilities` by value |
+| `point(instructions, image?, units?)` | `PointAnswer` | `x`, `y`, `present`, `confidence`, `image`, `width`, `height` (see Points and boxes) |
+| `box(instructions, image?, units?)` | `BoxAnswer` | `x1`, `y1`, `x2`, `y2`, `present`, `confidence`, `image`, `width`, `height` |
 
 `options` is a map of name to description, or a list of names: 1 to 255 of them. `levels` run low to high, 1 to 10 of them. `state`, `instructions`, descriptions and levels take a string or any JSON value.
 
@@ -108,9 +110,45 @@ Set `inlineThreshold` on the client to move the cut-off: `0` uploads every local
 
 Every image is checked before anything is sent: at most 16 per request, ids present and unique, URLs by the rules above that need no network, an upload id's media type one of the three, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
 
+## Points and boxes
+
+A `point` question finds one spot in an image; a `box` question draws a rectangle around something. They mix freely with the other types in one request, and several of them on the same image share one read of it.
+
+```ts
+import { Image, box, point, truth } from '@bynn/decisionnode';
+
+const d = await dn.decide({
+  images: [Image.fromUrl('belt', 'https://files.example.com/line-3/cam-2/0917.jpg')],
+  questions: {
+    pick: point('Point to the yellow package closest to the robot arm.'),
+    damage: box('Draw a box around the damaged package.', 'belt'),
+    any_damage: truth('Is any package on the belt damaged?'),
+  },
+});
+
+const pick = d.answers.pick; // a PointAnswer
+if (pick.present > 0.8 && pick.confidence > 0.7) {
+  robot.pick(pick.x, pick.y);
+} else {
+  sendToOperator();
+}
+```
+
+| Field | |
+|---|---|
+| `x`, `y` | The point, from the top-left corner of the image: `x` to the right, `y` down. Whole pixels by default; with units `normalized`, fractions of the width and height with 4 decimals |
+| `x1`, `y1`, `x2`, `y2` | The box: its top-left corner (`x1`, `y1`) and bottom-right corner (`x2`, `y2`), in the same units |
+| `present` | The probability that what you asked for is in the image at all. Under a low value the place is only the best guess |
+| `confidence` | The probability that the place is right, if the thing is there: for a point, that it lies on the thing; for a box, that it overlaps the true box by at least half (intersection over union of 0.5 or more) |
+| `image`, `width`, `height` | The image the answer refers to and its size in pixels, so you can draw or convert the answer without another lookup |
+
+Every field is always there. When several things match, the answer is the best match; say which one you mean in the instructions ("the leftmost yellow package").
+
+A point or box question needs an image in the request. With two or more images, name the one to look in (`point(instructions, 'belt')`). These rules and the units (`'pixels'` or `'normalized'`) are checked before anything is sent, and a fault throws `ValidationError` as the API would. `decide`, `decideMany` and batch requests take point and box questions; `systemone` does not.
+
 ## Videos
 
-Video is available when the API enables it. A video is sent as the frames you sampled, each with its time in seconds, and the questions see them as one video, in order and with their times. Only frames are sent: no video file, no video URL and no sound go to the API.
+A video is sent as the frames you sampled, each with its time in seconds, and the questions see them as one video, in order and with their times. Only frames are sent: no video file, no video URL and no sound go to the API.
 
 ```ts
 import { Video, VideoFrame, number, truth } from '@bynn/decisionnode';

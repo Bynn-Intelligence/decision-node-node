@@ -15,6 +15,10 @@ import { afterAll, beforeAll, describe, it } from 'vitest';
 import {
   Answer,
   Batch,
+  BoxAnswer,
+  PointAnswer,
+  box,
+  point,
   BatchResult,
   BatchResults,
   ChoiceAnswer,
@@ -162,6 +166,23 @@ function normAnswer(a: Answer): Json {
   if (a instanceof ScoreAnswer) {
     return { kind: 'score', score: a.score, confidence: a.confidence, probabilities: a.probabilities, legend: a.legend };
   }
+  if (a instanceof PointAnswer) {
+    return { kind: 'point', x: a.x, y: a.y, present: a.present, confidence: a.confidence, image: a.image, width: a.width, height: a.height };
+  }
+  if (a instanceof BoxAnswer) {
+    return {
+      kind: 'box',
+      x1: a.x1,
+      y1: a.y1,
+      x2: a.x2,
+      y2: a.y2,
+      present: a.present,
+      confidence: a.confidence,
+      image: a.image,
+      width: a.width,
+      height: a.height,
+    };
+  }
   if (a instanceof UnknownAnswer) return { kind: 'unknown', type: a.type, raw: a.raw };
   throw new Error(`an answer of class ${a.constructor.name}`);
 }
@@ -297,6 +318,10 @@ function decode(value: Json, ctx: Json = {}): Json {
           return score(raw.instructions, raw.levels);
         case '$number':
           return number(raw.instructions, raw.min, raw.max, raw.step);
+        case '$point':
+          return point(raw.instructions, raw.image, raw.units);
+        case '$box':
+          return box(raw.instructions, raw.image, raw.units);
         case '$video': {
           const a = decode(raw, ctx);
           const options: Json = {};

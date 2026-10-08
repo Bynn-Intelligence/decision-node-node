@@ -36,13 +36,40 @@ export interface NumberQuestion {
   step?: number;
 }
 
+/** Where in the image is it? Answered with `x` and `y`. */
+export interface PointQuestion {
+  type: 'point';
+  instructions?: unknown;
+  /** The id of the image to look in; required when the request has two or more images. */
+  image?: string;
+  /** `pixels` (the API's default) or `normalized` (fractions of the width and height). */
+  units?: PlaceUnits;
+}
+
+/** Draw a box around it. Answered with the corners `x1`, `y1`, `x2`, `y2`. */
+export interface BoxQuestion {
+  type: 'box';
+  instructions?: unknown;
+  /** The id of the image to look in; required when the request has two or more images. */
+  image?: string;
+  /** `pixels` (the API's default) or `normalized` (fractions of the width and height). */
+  units?: PlaceUnits;
+}
+
 /** A question of a type this SDK version does not know, sent as given. */
 export interface OtherQuestion {
   type: string;
   [field: string]: unknown;
 }
 
-export type Question = TruthQuestion | ChoiceQuestion<string> | ScoreQuestion | NumberQuestion | OtherQuestion;
+export type Question =
+  | TruthQuestion
+  | ChoiceQuestion<string>
+  | ScoreQuestion
+  | NumberQuestion
+  | PointQuestion
+  | BoxQuestion
+  | OtherQuestion;
 
 /** Questions by id. The id is yours: it comes back as the answer's key, unchanged. */
 export type Questions = { readonly [id: string]: Question };
@@ -127,4 +154,40 @@ export function number(instructions: unknown, min?: number | null, max?: number 
   if (max !== undefined && max !== null) q.max = max;
   if (step !== undefined && step !== null) q.step = step;
   return q;
+}
+
+/** The units of a point or box answer: `pixels` (the API's default) or `normalized` (fractions of the width and height). */
+export type PlaceUnits = 'pixels' | 'normalized';
+
+/**
+ * A point question: where in the image is it? Answered with `x` and `y`.
+ * `image` is the id of the image to look in (required when the request has two
+ * or more images); `image` and `units` are left out of the request when not given.
+ *
+ * ```ts
+ * point('Point to the yellow package closest to the robot arm.');
+ * ```
+ */
+export function point(instructions: unknown, image?: string | null, units?: PlaceUnits | null): PointQuestion {
+  return place('point', instructions, image, units) as PointQuestion;
+}
+
+/**
+ * A box question: draw a box around it. Answered with the top-left corner
+ * (`x1`, `y1`) and the bottom-right corner (`x2`, `y2`).
+ *
+ * ```ts
+ * box('Draw a box around the damaged package.', 'belt');
+ * ```
+ */
+export function box(instructions: unknown, image?: string | null, units?: PlaceUnits | null): BoxQuestion {
+  return place('box', instructions, image, units) as BoxQuestion;
+}
+
+function place(type: 'point' | 'box', instructions: unknown, image?: string | null, units?: PlaceUnits | null): PointQuestion | BoxQuestion {
+  const q: Record<string, unknown> = { type };
+  if (instructions !== undefined && instructions !== null) q.instructions = instructions;
+  if (image !== undefined && image !== null) q.image = image;
+  if (units !== undefined && units !== null) q.units = units;
+  return q as unknown as PointQuestion | BoxQuestion;
 }

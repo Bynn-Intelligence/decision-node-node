@@ -59,6 +59,68 @@ export class NumberAnswer extends Answer {
   }
 }
 
+/** The answer to a `point` question. */
+export class PointAnswer extends Answer {
+  declare readonly type: 'point';
+  /** From the image's left edge: whole pixels, or a fraction of the width when the question asked for `normalized`. */
+  readonly x: number;
+  /** From the image's top edge, in the same units. */
+  readonly y: number;
+  /** The probability that what the instructions describe is in the image at all. */
+  readonly present: number;
+  /** The probability that the point lies on the thing, if it is there. */
+  readonly confidence: number;
+  /** The id of the image looked in. */
+  readonly image: string;
+  /** That image's width in pixels. */
+  readonly width: number;
+  /** That image's height in pixels. */
+  readonly height: number;
+
+  constructor(raw: RawAnswer) {
+    super(raw);
+    this.x = raw.x as number;
+    this.y = raw.y as number;
+    this.present = raw.present as number;
+    this.confidence = raw.confidence as number;
+    this.image = raw.image as string;
+    this.width = raw.width as number;
+    this.height = raw.height as number;
+  }
+}
+
+/** The answer to a `box` question: the top-left (`x1`, `y1`) and bottom-right (`x2`, `y2`) corners. */
+export class BoxAnswer extends Answer {
+  declare readonly type: 'box';
+  readonly x1: number;
+  readonly y1: number;
+  readonly x2: number;
+  readonly y2: number;
+  /** The probability that what the instructions describe is in the image at all. */
+  readonly present: number;
+  /** The probability that the box overlaps the true box by at least half (IoU 0.5 or more), if the thing is there. */
+  readonly confidence: number;
+  /** The id of the image looked in. */
+  readonly image: string;
+  /** That image's width in pixels. */
+  readonly width: number;
+  /** That image's height in pixels. */
+  readonly height: number;
+
+  constructor(raw: RawAnswer) {
+    super(raw);
+    this.x1 = raw.x1 as number;
+    this.y1 = raw.y1 as number;
+    this.x2 = raw.x2 as number;
+    this.y2 = raw.y2 as number;
+    this.present = raw.present as number;
+    this.confidence = raw.confidence as number;
+    this.image = raw.image as string;
+    this.width = raw.width as number;
+    this.height = raw.height as number;
+  }
+}
+
 /** The answer to a `choice` question. `O` is the union of the option names. */
 export class ChoiceAnswer<O extends string = string> extends Answer {
   declare readonly type: 'choice';
@@ -141,6 +203,10 @@ function wellFormed(r: RawAnswer): boolean {
       return isNumber(r[LEGACY_TRUTH]);
     case 'number':
       return isNumber(r.number) && isNumber(r.expected) && isNumber(r.confidence) && isNumberMap(r.probabilities);
+    case 'point':
+      return ['x', 'y', 'present', 'confidence', 'width', 'height'].every((k) => isNumber(r[k])) && typeof r.image === 'string';
+    case 'box':
+      return ['x1', 'y1', 'x2', 'y2', 'present', 'confidence', 'width', 'height'].every((k) => isNumber(r[k])) && typeof r.image === 'string';
     case 'choice':
       return typeof r.choice === 'string' && isNumber(r.confidence) && isNumberMap(r.probabilities);
     case 'score':
@@ -170,6 +236,10 @@ export function parseAnswer(raw: unknown): Answer {
       return new TruthAnswer(r);
     case 'number':
       return new NumberAnswer(r);
+    case 'point':
+      return new PointAnswer(r);
+    case 'box':
+      return new BoxAnswer(r);
     case 'choice':
       return new ChoiceAnswer(r);
     default:
@@ -188,7 +258,11 @@ export type AnswerFor<Q> = Q extends { type: 'truth' | 'noul' }
       ? ScoreAnswer
       : Q extends { type: 'number' }
         ? NumberAnswer
-        : Answer;
+        : Q extends { type: 'point' }
+          ? PointAnswer
+          : Q extends { type: 'box' }
+            ? BoxAnswer
+            : Answer;
 
 /** Answers by question id, typed from the questions. */
 export type AnswersFor<Q> = { -readonly [K in keyof Q]: AnswerFor<Q[K]> };

@@ -41,7 +41,9 @@ export async function prepare(
   // The images and videos count toward the nesting limit as the objects they will be.
   let probe = Array.isArray(images) && images.length > 0 ? { ...fields, images: images.map(() => ({ id: '' })) } : fields;
   if (wires.length > 0) probe = { ...probe, videos: wires.map(() => ({ id: '' })) };
-  checkRequest(probe, profile, limits);
+  // The request's image ids as given, for the point and box rules.
+  const imageIds = Array.isArray(images) ? images.map((img) => (img !== null && typeof img === 'object' ? (img as { id?: unknown }).id : undefined)) : [];
+  checkRequest(probe, profile, limits, [], imageIds);
   const plan = await placer.check(images, limits);
   checkVideos(wires, images);
   return { head: serialise(wires.length > 0 ? { ...fields, videos: wires } : fields), plan };

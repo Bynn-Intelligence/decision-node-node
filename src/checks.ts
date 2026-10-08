@@ -25,7 +25,9 @@ export const MAX_SEQ = Number.MAX_SAFE_INTEGER;
 const TWO_53 = 2 ** 53;
 const MAX_NUMBER_DECIMALS = 6;
 const LEGACY_TRUTH = 'noul';
-const DECIDE_TYPES = new Set(['truth', LEGACY_TRUTH, 'choice', 'score', 'number']);
+const DECIDE_TYPES = new Set(['truth', LEGACY_TRUTH, 'choice', 'score', 'number', 'point', 'box']);
+const PLACE_TYPES = new Set(['point', 'box']);
+const UNITS = new Set(['pixels', 'normalized']);
 const SYSTEMONE_TYPES = new Set([LEGACY_TRUTH, 'choice', 'score']);
 
 /** Which path a request goes to: `/v1/systemone` takes fewer question types, and score levels only as a list. */
@@ -285,7 +287,54 @@ function isIndexKeyed(o: Record<string, unknown>): boolean {
   return keys.every((k) => /^(0|[1-9][0-9]*)$/.test(k) && Number(k) < keys.length);
 }
 
-function checkQuestion(id: string, q: unknown, entries: Entry[], deferred: Error[], profile: Profile, limits: HeldLimits): void {
+/**
+ * A point or box question: the image it looks in (none to look in, none named
+ * among two or more, not a string, not one of the request's), its units, then
+ * its instructions. `imageIds` is `null` where the request carries no images of
+ * its own (a session's open: its images come with its frames).
+ */
+function checkPlace(
+  id: string,
+  q: Record<string, unknown>,
+  loc: Array<string | number>,
+  entries: Entry[],
+  deferred: Error[],
+  imageIds: readonly unknown[] | null,
+): void {
+  const type = q.type as string;
+  if (imageIds !== null) {
+    const image = q.image;
+    if (imageIds.length === 0) {
+      entries.push(entry('image_required', loc, `A ${type} question needs an image in the request`, q));
+    } else if (!present(image)) {
+      if (imageIds.length >= 2) entries.push(entry('missing', [...loc, 'image'], 'Field required', q));
+    } else if (typeof image !== 'string') {
+      entries.push(entry('string_type', [...loc, 'image'], 'Input should be a valid string', image));
+    } else if (!imageIds.includes(image)) {
+      entries.push(entry('unknown_image', [...loc, 'image'], 'Input should be the id of an image of the request', image));
+    }
+  }
+  const units = q.units;
+  if (present(units) && !(typeof units === 'string' && UNITS.has(units))) {
+    entries.push(
+      entry('literal_error', [...loc, 'units'], "Input should be 'pixels' or 'normalized'", units, { expected: "'pixels' or 'normalized'" }),
+    );
+  }
+  if (!present(q.instructions)) {
+    const name = type === 'point' ? 'Point' : 'Box';
+    deferred.push(localError(BadRequestError, `${name} question must have instructions: ${id}`, null));
+  }
+}
+
+function checkQuestion(
+  id: string,
+  q: unknown,
+  entries: Entry[],
+  deferred: Error[],
+  profile: Profile,
+  limits: HeldLimits,
+  imageIds: readonly unknown[] | null = null,
+): void {
   const base: Array<string | number> = ['body', 'questions', id];
   if (!isObject(q)) {
     entries.push(entry('model_type', base, 'Input should be a valid dictionary or object', q));
@@ -304,7 +353,9 @@ function checkQuestion(id: string, q: unknown, entries: Entry[], deferred: Error
   const instructions = q.instructions;
   if (present(instructions) && !isSdl(instructions)) entries.push(...sdlEntries([...loc, 'instructions'], instructions));
   const criteria = q.criteria;
-  if (type === 'number') {
+  if (PLACE_TYPES.has(type)) {
+    checkPlace(id, q, loc, entries, deferred, imageIds);
+  } else if (type === 'number') {
     if (limits.number_max_grid_values === 0) {
       deferred.push(localError(BadRequestError, `Model ${String(limits.model)} does not answer number questions.`));
       return;
@@ -368,15 +419,23 @@ function checkQuestion(id: string, q: unknown, entries: Entry[], deferred: Error
  * Every fixed rule of a request body, in the server's order: the nesting
  * limit, then every 422 entry (the state, each question), then the first 400
  * in question order. `extra` are 422 entries found before (a session's fields).
+ * `imageIds` are the request's image ids, for the point and box rules; `null`
+ * where the request carries no images of its own.
  */
-export function checkRequest(body: Record<string, unknown>, profile: Profile = 'decide', limits: HeldLimits = {}, extra: Entry[] = []): void {
+export function checkRequest(
+  body: Record<string, unknown>,
+  profile: Profile = 'decide',
+  limits: HeldLimits = {},
+  extra: Entry[] = [],
+  imageIds: readonly unknown[] | null = null,
+): void {
   checkNesting(body);
   const entries: Entry[] = [...extra];
   const deferred: Error[] = [];
   const state = body.state;
   if (present(state) && !isSdl(state)) entries.push(...sdlEntries(['body', 'state'], state));
   const questions = isObject(body.questions) ? body.questions : {};
-  for (const [id, q] of Object.entries(questions)) checkQuestion(id, q, entries, deferred, profile, limits);
+  for (const [id, q] of Object.entries(questions)) checkQuestion(id, q, entries, deferred, profile, limits, imageIds);
   if (entries.length > 0) throw localValidation(entries);
   if (deferred.length > 0) throw deferred[0]!;
 }
