@@ -272,6 +272,12 @@ function decode(value: Json, ctx: Json = {}): Json {
           return resolveRef(raw, ctx);
         case '$text':
           return String(raw.repeat).repeat(raw.times);
+        case '$nest': {
+          // The value inside `depth` arrays: [[[...value...]]]
+          let out = decode(raw.value, ctx);
+          for (let i = 0; i < raw.depth; i++) out = [out];
+          return out;
+        }
         case '$truth':
           return truth(raw.instructions, raw.true, raw.false);
         case '$choice':
@@ -404,6 +410,7 @@ function makeClient(
   extra: Record<string, string>,
   sleep?: (ms: number) => Promise<void>,
 ): DecisionNode {
+  const session = extra['x-mock-session'];
   for (const v of ENV_VARS) delete process.env[v];
   for (const [k, v] of Object.entries((c.env ?? {}) as Record<string, string>)) process.env[k] = v.replace('{mock_url}', mockUrl);
   const spec = c.client ?? {};
@@ -422,6 +429,13 @@ function makeClient(
   }
   opts.headers = { ...(spec.headers ?? {}), ...extra };
   if (sleep) opts.sleep = sleep;
+  if (spec.clock === 'mock' && session !== undefined) {
+    // The SDK's clock reads the mock's clock for this session, so a case that moves the mock's time moves the SDK's.
+    opts.clock = async () => {
+      const res = await fetch(`${mockUrl}/_mock/clock?session=${encodeURIComponent(session)}`);
+      return (await res.json()).epoch_seconds * 1000;
+    };
+  }
   if (spec.http_client === 'caller_following_redirects') {
     // A fetch the caller made, set to follow redirects unless told otherwise:
     // the default of the global fetch and of most wrappers around it.
@@ -783,7 +797,18 @@ async function runSteps(c: Json, client: DecisionNode, session: string, events: 
       }
     } else if ('send' in step) {
       const { session: name, ...args } = step.send;
-      await (ctx[name] as Session).send(decode(args, ctx));
+      let refused: unknown;
+      try {
+        await (ctx[name] as Session).send(decode(args, ctx));
+      } catch (err) {
+        // A frame that breaks a fixed rule is refused locally and nothing is sent.
+        if (!('outcome' in step)) throw err;
+        refused = err;
+      }
+      if ('outcome' in step) {
+        if (refused === undefined) throw new Error(`${where}: expected ${short(step.outcome)}, the frame was sent`);
+        await checkOutcome(step.outcome, refused, `${where}.outcome`);
+      }
     } else if ('read' in step) {
       const s = ctx[step.read.session] as Session;
       let count: number | undefined = step.read.count;
