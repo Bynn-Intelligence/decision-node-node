@@ -1,7 +1,7 @@
 // Runs the built package against the conformance mock in any runtime with
 // fetch: Node, Deno or Bun. Needs DECISIONNODE_BASE_URL (the mock) and
 // DECISIONNODE_CONFORMANCE_DIR (for an image fixture).
-import { ContextLimitError, DecisionNode, Image, ValidationError, choice, score, truth } from '../../dist/index.js';
+import { ContextLimitError, DecisionNode, Image, ValidationError, choice, number, score, truth } from '../../dist/index.js';
 
 const env = (name) => (globalThis.Deno ? globalThis.Deno.env.get(name) : globalThis.process.env[name]);
 const suite = env('DECISIONNODE_CONFORMANCE_DIR');
@@ -46,5 +46,26 @@ try {
   if (err.name !== 'DecisionNodeError' || err.status !== 302) fail(`redirect: ${err.name} ${err.status}`);
 }
 if (!(new ContextLimitError('x') instanceof Error) || ValidationError.name !== 'ValidationError') fail('classes');
+
+// Number, systemone, an upload, a session and a batch.
+const n = await dn.number({ state: 'Drone frame over row B4.', instructions: 'How many cars?', min: 0, max: 50 });
+if (n.type !== 'number' || typeof n.number !== 'number') fail('number');
+const s1 = await dn.systemone({ state: 's', questions: { t: truth('Escalate?') } });
+if (typeof s1.answers.t.truth !== 'number') fail('systemone');
+const uploaded = new DecisionNode({ apiKey: 'dn_test_runtime', inlineThreshold: 0 });
+const u = await uploaded.decide({ state: 's', questions: { q: number('How many?', 0, 9) }, images: [Image.fromPath('receipt', `${suite}/fixtures/images/pixel.png`)] });
+if (u.answers.q.type !== 'number') fail('upload');
+const session = await dn.openSession({ questions: { abort: truth('Abort?') } });
+await session.connect();
+await session.send({ frame: { battery: 0.3 } });
+const reply = await session.next({ timeout: 10_000 });
+if (reply.seq !== 1) fail(`session reply ${reply.name ?? reply.seq}`);
+await session.end();
+const run = await new DecisionNode({ apiKey: 'dn_test_runtime', sleep: async () => {} }).runBatch(
+  [{ customId: 't1', state: 'x', questions: { refund: truth('Refund?') } }],
+  { pollInterval: 10_000 },
+);
+const lines = await run.results.toArray();
+if (run.batch.state !== 'completed' || lines.length !== 1 || lines[0].status !== 200) fail('batch');
 
 console.log('runtime smoke: ok');

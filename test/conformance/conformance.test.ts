@@ -6,27 +6,36 @@
  * started on a free port; nothing else is contacted.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, it } from 'vitest';
 
 import {
   Answer,
+  Batch,
+  BatchResult,
+  BatchResults,
   ChoiceAnswer,
   Decision,
   DecisionNode,
   DecisionNodeError,
+  FrameError,
   Image,
+  NumberAnswer,
   RefusalError,
+  Reply,
   ScoreAnswer,
+  Session,
+  SessionClosed,
   TruthAnswer,
   UnknownAnswer,
   ValidationError,
   RateLimitError,
   OverloadedError,
   choice,
+  number,
   score,
   truth,
   type ModelInfo,
@@ -143,6 +152,9 @@ function normSafety(s: Safety | null): Json {
 }
 
 function normAnswer(a: Answer): Json {
+  if (a instanceof NumberAnswer) {
+    return { kind: 'number', number: a.number, expected: a.expected, confidence: a.confidence, probabilities: a.probabilities };
+  }
   if (a instanceof TruthAnswer) return { kind: 'truth', truth: a.truth };
   if (a instanceof ChoiceAnswer) return { kind: 'choice', choice: a.choice, confidence: a.confidence, probabilities: a.probabilities };
   if (a instanceof ScoreAnswer) {
@@ -152,6 +164,10 @@ function normAnswer(a: Answer): Json {
   throw new Error(`an answer of class ${a.constructor.name}`);
 }
 
+function normAnswers(answers: Record<string, Answer>): Json {
+  return Object.fromEntries(Object.entries(answers).map(([k, v]) => [k, normAnswer(v)]));
+}
+
 function normDecision(d: Decision): Json {
   return {
     model: d.model,
@@ -159,7 +175,7 @@ function normDecision(d: Decision): Json {
     latency_ms: d.latencyMs,
     usage: { input_tokens: d.usage.inputTokens, output_tokens: d.usage.outputTokens },
     safety: normSafety(d.safety),
-    answers: Object.fromEntries(Object.entries(d.answers).map(([k, v]) => [k, normAnswer(v)])),
+    answers: normAnswers(d.answers),
     raw: d.raw,
   };
 }
@@ -177,6 +193,28 @@ function normError(e: DecisionNodeError): Json {
     entries: e instanceof ValidationError ? e.entries : null,
     retry_after: e instanceof RateLimitError || e instanceof OverloadedError ? e.retryAfter : null,
   };
+}
+
+function normSession(s: Session): Json {
+  return { ...s.raw, answers: normAnswers(s.answers) };
+}
+
+function normEvent(ev: unknown): Json {
+  if (ev instanceof Reply) {
+    const out: Json = { seq: ev.seq, answers: normAnswers(ev.answers), usage: ev.usage, latency_ms: ev.latencyMs, safety: ev.safety };
+    if (ev.dropped !== null) out.dropped = ev.dropped;
+    return { reply: out };
+  }
+  if (ev instanceof FrameError) {
+    const out: Json = { seq: ev.seq, error_type: ev.errorType, message: ev.message };
+    if (ev.category !== null) out.category = ev.category;
+    if (ev.retryAfterMs !== null) out.retry_after_ms = ev.retryAfterMs;
+    if (ev.usage !== null) out.usage = ev.usage;
+    if (ev.safety !== null) out.safety = ev.safety;
+    return { frame_error: out };
+  }
+  if (ev instanceof SessionClosed) return { closed: { code: ev.code, reopen: ev.reopen } };
+  throw new Error(`unknown session event ${short(ev)}`);
 }
 
 function classNames(err: unknown): string[] {
@@ -206,52 +244,102 @@ function checkError(spec: Json, err: unknown, path: string): void {
 
 // ---------------------------------------------------------------- neutral call to SDK call
 
-function decode(value: Json): Json {
+function imageBytes(a: Json): Uint8Array {
+  let data: Uint8Array = 'path' in a ? new Uint8Array(readFileSync(join(SUITE, a.path))) : new Uint8Array(Buffer.from(a.data_base64, 'base64'));
+  if ('pad_to' in a && a.pad_to > data.length) {
+    // The image's own bytes, then zero bytes: the header (type, pixels) is unchanged.
+    const padded = new Uint8Array(a.pad_to);
+    padded.set(data);
+    data = padded;
+  }
+  return data;
+}
+
+function resolveRef(path: string, ctx: Json): Json {
+  const [name, ...rest] = path.split('.');
+  let cur = ctx[name!];
+  for (const part of rest) cur = Array.isArray(cur) ? cur[Number(part)] : cur instanceof Batch ? cur.raw[part] : cur[part];
+  return cur;
+}
+
+function decode(value: Json, ctx: Json = {}): Json {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const keys = Object.keys(value);
     if (keys.length === 1) {
-      const a = value[keys[0]!];
+      const raw = value[keys[0]!];
       switch (keys[0]) {
+        case '$ref':
+          return resolveRef(raw, ctx);
+        case '$text':
+          return String(raw.repeat).repeat(raw.times);
         case '$truth':
-          return truth(a.instructions, a.true, a.false);
+          return truth(raw.instructions, raw.true, raw.false);
         case '$choice':
-          return choice(a.instructions, a.options);
+          return choice(raw.instructions, raw.options);
         case '$score':
-          return score(a.instructions, a.levels);
-        case '$image':
-          if ('path' in a) return Image.fromPath(a.id, join(SUITE, a.path));
+          return score(raw.instructions, raw.levels);
+        case '$number':
+          return number(raw.instructions, raw.min, raw.max, raw.step);
+        case '$image': {
+          const a = decode(raw, ctx);
           if ('url' in a) return Image.fromUrl(a.id, a.url);
-          return Image.fromBytes(a.id, new Uint8Array(Buffer.from(a.data_base64, 'base64')), a.media_type);
+          if ('upload_id' in a) return Image.fromUploadId(a.id, a.upload_id, a.media_type ?? undefined);
+          if ('path' in a && !('pad_to' in a)) return Image.fromPath(a.id, join(SUITE, a.path));
+          // Without a media type the SDK is given the bytes alone and must detect the format.
+          return Image.fromBytes(a.id, imageBytes(a), a.media_type ?? undefined);
+        }
       }
     }
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decode(v)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decode(v, ctx)]));
   }
-  if (Array.isArray(value)) return value.map(decode);
+  if (Array.isArray(value)) return value.map((v) => decode(v, ctx));
   return value;
 }
 
-function decideParams(args: Json): Json {
-  const p: Json = { questions: decode(args.questions) };
-  if ('state' in args) p.state = decode(args.state);
-  if ('images' in args) p.images = decode(args.images);
+function decideParams(args: Json, ctx: Json): Json {
+  const p: Json = { questions: decode(args.questions, ctx) };
+  if ('state' in args) p.state = decode(args.state, ctx);
+  if ('images' in args) p.images = decode(args.images, ctx);
   if ('model' in args) p.model = args.model;
   return p;
 }
 
-async function invoke(client: DecisionNode, call: Json): Promise<Json> {
+function batchRequests(list: Json[], ctx: Json): Json[] {
+  return list.map(({ custom_id, ...rest }: Json) => ({ customId: custom_id, ...decideParams(rest, ctx) }));
+}
+
+function sessionParams(args: Json, ctx: Json): Json {
+  const p: Json = { questions: decode(args.questions, ctx) };
+  for (const [from, to] of [
+    ['state', 'state'],
+    ['instructions', 'instructions'],
+    ['model', 'model'],
+    ['window', 'window'],
+    ['ttl_seconds', 'ttlSeconds'],
+  ] as const) {
+    if (from in args) p[to] = decode(args[from], ctx);
+  }
+  return p;
+}
+
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise<Json> {
   const { method, args } = call;
   const common = (p: Json) => {
-    if ('state' in args) p.state = decode(args.state);
-    if ('images' in args) p.images = decode(args.images);
+    if ('state' in args) p.state = decode(args.state, ctx);
+    if ('images' in args) p.images = decode(args.images, ctx);
     if ('model' in args) p.model = args.model;
     return p;
   };
   switch (method) {
     case 'decide':
-      return client.decide(decideParams(args));
+      return client.decide(decideParams(args, ctx));
+    case 'systemone':
+      return client.systemone(decideParams(args, ctx));
     case 'decide_many':
       return client.decideMany(
-        args.requests.map(decideParams),
+        args.requests.map((r: Json) => decideParams(r, ctx)),
         args.concurrency === undefined ? {} : { concurrency: args.concurrency },
       );
     case 'check':
@@ -260,12 +348,51 @@ async function invoke(client: DecisionNode, call: Json): Promise<Json> {
       return client.classify(common({ instructions: decode(args.instructions), options: decode(args.options) }));
     case 'score':
       return client.score(common({ instructions: decode(args.instructions), levels: decode(args.levels) }));
+    case 'number':
+      return client.number(common({ instructions: decode(args.instructions), min: args.min, max: args.max, step: args.step }));
     case 'gate':
       return client.gate(common({ action: decode(args.action), context: decode(args.context) }));
     case 'models':
       return client.models();
     case 'decide_raw':
       return client.decideRaw(args.body);
+    case 'upload':
+      return client.upload(decode(args.images, ctx));
+    case 'open_session':
+      return client.openSession(sessionParams(args, ctx));
+    case 'supervise': {
+      const replies: unknown[] = [];
+      const readings: Json[] = decode(args.feed, ctx);
+      const interval = args.feed_interval_ms ?? 0;
+      async function* feed() {
+        for (const [i, reading] of readings.entries()) {
+          if (i > 0) await sleepMs(interval);
+          yield reading;
+        }
+      }
+      const closed = await client.supervise(sessionParams(args.body, ctx), feed(), (ev) => void replies.push(ev));
+      return { supervised: true, replies, closed };
+    }
+    case 'run_batch': {
+      const opts: Json = {};
+      if (args.poll_interval !== undefined) opts.pollInterval = args.poll_interval * 1000;
+      if (args.timeout !== undefined) opts.timeout = args.timeout * 1000;
+      return client.runBatch(batchRequests(args.requests, ctx), opts);
+    }
+    case 'batches.create':
+      return client.batches.create(batchRequests(args.requests ?? [], ctx));
+    case 'batches.add':
+      return client.batches.add(decode(args.batch_id, ctx), batchRequests(args.requests, ctx));
+    case 'batches.finalize':
+      return client.batches.finalize(decode(args.batch_id, ctx));
+    case 'batches.get':
+      return client.batches.get(decode(args.batch_id, ctx));
+    case 'batches.cancel':
+      return client.batches.cancel(decode(args.batch_id, ctx));
+    case 'batches.list':
+      return client.batches.list({ offset: args.offset, limit: args.limit });
+    case 'batches.results':
+      return client.batches.results(decode(args.batch_id, ctx));
     default:
       throw new Error(`unknown method ${method}`);
   }
@@ -285,6 +412,7 @@ function makeClient(
   if (spec.model != null) opts.model = spec.model;
   if (spec.timeout != null) opts.timeout = spec.timeout * 1000;
   if (spec.max_retries != null) opts.maxRetries = spec.max_retries;
+  if (spec.inline_threshold != null) opts.inlineThreshold = spec.inline_threshold;
   if ('base_url' in spec) {
     if (spec.base_url != null) {
       opts.baseUrl = spec.base_url.replace('{mock_url}', mockUrl).replace('{mock_port}', new URL(mockUrl).port);
@@ -311,7 +439,19 @@ async function mockLog(session: string, path?: string): Promise<Json> {
   const q = new URLSearchParams({ session });
   if (path !== undefined) q.set('path', path);
   const res = await fetch(`${mockUrl}/_mock/requests?${q}`);
-  return res.json();
+  const out = await res.json();
+  // Pongs on a session's socket are counted for the pong cases, not as requests.
+  out.pongs = out.requests.filter((r: Json) => r.method === 'PONG').length;
+  out.requests = out.requests.filter((r: Json) => r.method !== 'PONG');
+  return out;
+}
+
+async function mockClock(session: string, body: Json): Promise<void> {
+  await fetch(`${mockUrl}/_mock/clock?session=${encodeURIComponent(session)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 beforeAll(async () => {
@@ -331,48 +471,164 @@ afterAll(() => {
   for (const v of ENV_VARS) delete process.env[v];
 });
 
+// ---------------------------------------------------------------- request records
+
+function parseJsonl(text: string): Json[] {
+  const t = text.trim();
+  if (t === '') return [];
+  if (t.startsWith('[')) return JSON.parse(t);
+  return text.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
+}
+
+function checkValue(check: Json, body: Json, where: string): void {
+  const [found, val] = pointer(body, check.pointer);
+  if (check.absent) {
+    if (found) throw new Error(`${where} body${check.pointer}: must be absent, got ${short(val)}`);
+    return;
+  }
+  if (!found) throw new Error(`${where} body${check.pointer}: missing`);
+  if ('equals' in check && !same(check.equals, val)) throw new Error(`${where} body${check.pointer}: expected ${short(check.equals)}, got ${short(val)}`);
+  if ('type' in check && !JSON_TYPES[check.type]!(val)) throw new Error(`${where} body${check.pointer}: expected a ${check.type}`);
+  if ('pattern' in check && (typeof val !== 'string' || !new RegExp(check.pattern).test(val))) {
+    throw new Error(`${where} body${check.pointer}: ${short(val)} does not match ${check.pattern}`);
+  }
+  if ('keys' in check && !same(check.keys, val && typeof val === 'object' ? Object.keys(val) : val)) {
+    throw new Error(`${where} body${check.pointer}: keys expected ${short(check.keys)}, got ${short(Object.keys(val ?? {}))}`);
+  }
+}
+
+function checkRequest(exp: Json, got: Json, where: string): void {
+  if (got.method !== exp.method) throw new Error(`${where} method: expected ${exp.method}, got ${got.method} ${got.path}`);
+  if ('path' in exp && got.path !== exp.path) throw new Error(`${where} path: expected ${exp.path}, got ${got.path}`);
+  if ('path_pattern' in exp && !new RegExp(exp.path_pattern).test(got.path)) {
+    throw new Error(`${where} path: ${got.path} does not match ${exp.path_pattern}`);
+  }
+  if ('query' in exp) {
+    const q = Object.fromEntries(new URLSearchParams(got.query ?? ''));
+    if (!same(exp.query, q)) throw new Error(`${where} query: expected ${short(exp.query)}, got ${short(q)}`);
+  }
+  if ('status' in exp && got.status !== exp.status) throw new Error(`${where} status: the mock answered ${got.status}, expected ${exp.status}`);
+  for (const [name, value] of Object.entries(exp.headers ?? {})) {
+    if (got.headers[name.toLowerCase()] !== value) throw new Error(`${where} header ${name}: expected ${short(value)}, got ${short(got.headers[name.toLowerCase()])}`);
+  }
+  for (const [name, pattern] of Object.entries((exp.header_patterns ?? {}) as Record<string, string>)) {
+    const v = got.headers[name.toLowerCase()];
+    if (v === undefined || !new RegExp(pattern).test(v)) throw new Error(`${where} header ${name}: ${short(v)} does not match ${pattern}`);
+  }
+  for (const name of (exp.absent_headers ?? []) as string[]) {
+    if (name.toLowerCase() in got.headers) throw new Error(`${where} header ${name} must not be sent`);
+  }
+  if ('body_base64' in exp) {
+    if (got.body_base64 !== exp.body_base64) throw new Error(`${where} body: the bytes differ`);
+    return;
+  }
+  if ('body_sha256' in exp) {
+    const digest = createHash('sha256').update(Buffer.from(got.body_base64 ?? '', 'base64')).digest('hex');
+    if (digest !== exp.body_sha256) throw new Error(`${where} body: sha256 ${digest}, expected ${exp.body_sha256}`);
+    return;
+  }
+  if ('jsonl' in exp) {
+    const lines = parseJsonl(got.body_text);
+    if (!same(exp.jsonl, lines)) throw new Error(`${where} body lines: expected ${short(exp.jsonl)}, got ${short(lines)}`);
+    return;
+  }
+  if ('jsonl_count' in exp || 'jsonl_checks' in exp) {
+    const lines = parseJsonl(got.body_text);
+    if ('jsonl_count' in exp && lines.length !== exp.jsonl_count) throw new Error(`${where} body: expected ${exp.jsonl_count} lines, got ${lines.length}`);
+    for (const check of (exp.jsonl_checks ?? []) as Json[]) {
+      if (check.line >= lines.length) throw new Error(`${where} body: no line ${check.line}`);
+      checkValue(check, lines[check.line], `${where} line ${check.line}`);
+    }
+    return;
+  }
+  const body = got.body_text ? JSON.parse(got.body_text) : null;
+  if ('body' in exp) {
+    if (!same(exp.body, body)) throw new Error(`${where} body: expected ${short(exp.body)}, got ${short(body)}`);
+  } else if (!('body_checks' in exp) && got.body_text && !exp.any_body) {
+    throw new Error(`${where}: expected no body, got ${short(got.body_text)}`);
+  }
+  for (const check of (exp.body_checks ?? []) as Json[]) checkValue(check, body, where);
+  for (const ptr of (exp.ordered_keys ?? []) as string[]) {
+    const want = orderedKeys(JSON.stringify(exp.body), ptr);
+    const order = orderedKeys(got.body_text, ptr);
+    if (!same(want, order)) throw new Error(`${where} body${ptr}: key order expected ${short(want)}, got ${short(order)}`);
+  }
+}
+
+function permutations(xs: number[]): number[][] {
+  if (xs.length <= 1) return [xs];
+  return xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
+}
+
+function checkRequestList(expected: Json[], log: Json[]): void {
+  if (log.length !== expected.length) {
+    throw new Error(`expected ${expected.length} requests, the mock received ${log.length}: ${short(log.map((r) => `${r.method} ${r.path}`))}`);
+  }
+  let i = 0;
+  while (i < expected.length) {
+    if (!expected[i].parallel) {
+      checkRequest(expected[i], log[i], `requests[${i}]`);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < expected.length && expected[j].parallel) j++;
+    // Requests sent in parallel may arrive in any order: one assignment must hold.
+    const idx = Array.from({ length: j - i }, (_, k) => i + k);
+    const reasons: string[] = [];
+    const ok = permutations(idx).some((perm) => {
+      try {
+        idx.forEach((k, n) => checkRequest(expected[k], log[perm[n]!], `requests[${k}]`));
+        return true;
+      } catch (err) {
+        reasons.push((err as Error).message);
+        return false;
+      }
+    });
+    if (!ok) throw new Error(`no order of the parallel requests matches: ${reasons[0]}`);
+    i = j;
+  }
+}
+
 // ---------------------------------------------------------------- the five kinds
 
 async function runRequest(c: Json): Promise<void> {
   const session = randomUUID();
-  const client = makeClient(c, mockUrl, { 'x-mock-session': session });
-  await invoke(client, c.call);
+  const extra: Record<string, string> = { 'x-mock-session': session };
+  if (c.mock) extra['x-mock-scenario'] = `request/${c.id}`;
+  const client = makeClient(c, mockUrl, extra);
+  const result = await invoke(client, c.call);
+  if (result instanceof BatchResults) await result.toArray();
+  await sleepMs(20);
   const log = (await mockLog(session)).requests;
-  if (log.length !== 1) throw new Error(`expected 1 request, the mock received ${log.length}`);
-  const got = log[0];
-  const exp = c.expect.request;
-  expect(got.method).toBe(exp.method);
-  expect(got.path).toBe(exp.path);
-  for (const [name, value] of Object.entries(exp.headers ?? {})) {
-    if (got.headers[name.toLowerCase()] !== value) throw new Error(`header ${name}: expected ${short(value)}, got ${short(got.headers[name.toLowerCase()])}`);
+  if ('request' in c.expect) {
+    if (log.length !== 1) throw new Error(`expected 1 request, the mock received ${log.length}`);
+    checkRequest(c.expect.request, log[0], 'request');
+  } else {
+    checkRequestList(c.expect.requests, log);
   }
-  for (const [name, pattern] of Object.entries((exp.header_patterns ?? {}) as Record<string, string>)) {
-    const v = got.headers[name.toLowerCase()];
-    if (v === undefined || !new RegExp(pattern).test(v)) throw new Error(`header ${name}: ${short(v)} does not match ${pattern}`);
-  }
-  for (const name of (exp.absent_headers ?? []) as string[]) {
-    if (name.toLowerCase() in got.headers) throw new Error(`header ${name} must not be sent`);
-  }
-  const body = got.body_text ? JSON.parse(got.body_text) : null;
-  if ('body' in exp) {
-    if (!same(exp.body, body)) throw new Error(`body: expected ${short(exp.body)}, got ${short(body)}`);
-  } else if (!('body_checks' in exp) && got.body_text) {
-    throw new Error(`expected no body, got ${short(got.body_text)}`);
-  }
-  for (const check of (exp.body_checks ?? []) as Json[]) {
-    const [found, val] = pointer(body, check.pointer);
-    if (!found) throw new Error(`body${check.pointer}: missing`);
-    if ('equals' in check && !same(check.equals, val)) throw new Error(`body${check.pointer}: expected ${short(check.equals)}, got ${short(val)}`);
-    if ('type' in check && !JSON_TYPES[check.type]!(val)) throw new Error(`body${check.pointer}: expected a ${check.type}`);
-    if ('keys' in check && !same(check.keys, val && typeof val === 'object' ? Object.keys(val) : val)) {
-      throw new Error(`body${check.pointer}: keys expected ${short(check.keys)}, got ${short(Object.keys(val ?? {}))}`);
+}
+
+async function checkBatchResults(expected: Json[], results: unknown, path: string): Promise<void> {
+  if (!(results instanceof BatchResults)) throw new Error(`${path}: expected batch results, got ${short(results)}`);
+  const list: BatchResult[] = await results.toArray();
+  if (list.length !== expected.length) throw new Error(`${path}: expected ${expected.length} results, got ${list.length}`);
+  expected.forEach((spec, i) => {
+    const r = list[i]!;
+    const where = `${path}[${i}]`;
+    if ('custom_id' in spec && !same(spec.custom_id, r.customId)) throw new Error(`${where}.custom_id: expected ${spec.custom_id}, got ${r.customId}`);
+    if ('status' in spec && !same(spec.status, r.status)) throw new Error(`${where}.status: expected ${spec.status}, got ${r.status}`);
+    if ('headers' in spec) match(spec.headers, r.headers, `${where}.headers`);
+    if ('decision' in spec && spec.decision !== null) {
+      if (r.decision === null) throw new Error(`${where}: expected a decision, got none`);
+      match(spec.decision, normDecision(r.decision), `${where}.decision`);
     }
-  }
-  for (const ptr of (exp.ordered_keys ?? []) as string[]) {
-    const want = orderedKeys(JSON.stringify(exp.body), ptr);
-    const order = orderedKeys(got.body_text, ptr);
-    if (!same(want, order)) throw new Error(`body${ptr}: key order expected ${short(want)}, got ${short(order)}`);
-  }
+    if ('error' in spec) {
+      if (r.error === null) throw new Error(`${where}: expected an error value, got none`);
+      checkError(spec.error, r.error, `${where}.error`);
+    }
+    if (spec.no_decision && r.decision !== null) throw new Error(`${where}: expected no decision`);
+  });
 }
 
 async function runResponse(c: Json): Promise<void> {
@@ -390,6 +646,18 @@ async function runResponse(c: Json): Promise<void> {
     if (!same(exp.models, got)) throw new Error(`models: expected ${short(exp.models)}, got ${short(got)}`);
   } else if ('raw' in exp) {
     if (!same(exp.raw, result)) throw new Error(`raw: expected ${short(exp.raw)}, got ${short(result)}`);
+  } else if ('batch' in exp) {
+    match(exp.batch, (result as Batch).raw, 'batch');
+  } else if ('batch_page' in exp) {
+    match(exp.batch_page, result.raw, 'batch_page');
+  } else if ('batch_results' in exp) {
+    await checkBatchResults(exp.batch_results, result, 'batch_results');
+  } else if ('session' in exp) {
+    match(exp.session, normSession(result), 'session');
+  } else if ('upload_ids' in exp) {
+    if (!same(exp.upload_ids, result)) throw new Error(`upload_ids: expected ${short(exp.upload_ids)}, got ${short(result)}`);
+  } else {
+    throw new Error(`no known expectation in ${short(Object.keys(exp))}`);
   }
 }
 
@@ -401,7 +669,8 @@ async function runError(c: Json): Promise<void> {
   let caughtByName = false;
   try {
     const client = makeClient(c, mockUrl, { 'x-mock-session': session, 'x-mock-scenario': `error/${c.id}` });
-    await invoke(client, c.call);
+    const result = await invoke(client, c.call);
+    if (result instanceof BatchResults) await result.toArray();
   } catch (err) {
     caught = err;
     // Caught against the exported name DecisionNodeError, imported by that name above.
@@ -423,7 +692,10 @@ function isArgumentError(err: unknown): boolean {
   return (err instanceof RangeError || err instanceof TypeError) && !(err instanceof DecisionNodeError);
 }
 
-function checkOutcome(spec: Json, result: unknown, path: string): void {
+const UPLOAD_ID = /^upl_[0-9a-f]{32}$/;
+
+async function checkOutcome(spec: Json, result: unknown, path: string): Promise<void> {
+  if (result instanceof SessionClosed && !('closed' in spec)) throw new Error(`${path}: the call raised SessionClosed(${result.code})`);
   if (spec.argument_error) {
     if (!isArgumentError(result)) {
       throw new Error(`${path}: expected an argument error, got ${result instanceof Error ? `${result.name}: ${result.message}` : 'a result'}`);
@@ -431,13 +703,159 @@ function checkOutcome(spec: Json, result: unknown, path: string): void {
     return;
   }
   if (isArgumentError(result)) throw new Error(`${path}: unexpected argument error: ${(result as Error).message}`);
-  if ('result' in spec) {
-    if (result instanceof Error) throw new Error(`${path}: expected a decision, got ${result.name}: ${result.message}`);
-    if ('decision' in spec) match(spec.decision, normDecision(result as Decision), `${path}.decision`);
-  } else {
+  if (!('result' in spec)) {
     if (!(result instanceof Error)) throw new Error(`${path}: expected ${spec.error}, got a result`);
     checkError(spec, result, path);
+    return;
   }
+  if (result instanceof Error) throw new Error(`${path}: expected ${spec.result}, got ${result.name}: ${result.message}`);
+  const r = result as Json;
+  switch (spec.result) {
+    case 'decision':
+      if (!(r instanceof Decision)) throw new Error(`${path}: expected a Decision, got ${short(r)}`);
+      if ('decision' in spec) match(spec.decision, normDecision(r), `${path}.decision`);
+      return;
+    case 'answer':
+      match(spec.answer ?? {}, normAnswer(r), `${path}.answer`);
+      return;
+    case 'batch':
+      if (!(r instanceof Batch)) throw new Error(`${path}: expected a Batch, got ${short(r)}`);
+      match(spec.batch ?? {}, r.raw, `${path}.batch`);
+      return;
+    case 'batch_page':
+      match(spec.batch_page ?? {}, r.raw, `${path}.batch_page`);
+      return;
+    case 'batch_results':
+      await checkBatchResults(spec.batch_results, r, `${path}.batch_results`);
+      return;
+    case 'batch_run':
+      match(spec.batch ?? {}, r.batch.raw, `${path}.batch`);
+      if ('batch_results' in spec) await checkBatchResults(spec.batch_results, r.results, `${path}.batch_results`);
+      return;
+    case 'session':
+      if (!(r instanceof Session)) throw new Error(`${path}: expected a Session, got ${short(r)}`);
+      match(spec.session ?? {}, normSession(r), `${path}.session`);
+      return;
+    case 'upload_ids': {
+      if (!Array.isArray(r) || ('count' in spec && r.length !== spec.count)) throw new Error(`${path}: expected ${spec.count} upload ids, got ${short(r)}`);
+      for (const id of r) if (typeof id !== 'string' || !UPLOAD_ID.test(id)) throw new Error(`${path}: ${short(id)} is not an upload id`);
+      if (spec.distinct !== undefined && (new Set(r).size === r.length) !== spec.distinct) throw new Error(`${path}: upload ids ${short(r)}`);
+      return;
+    }
+    case 'supervised': {
+      if (!r || r.supervised !== true) throw new Error(`${path}: expected supervise to return`);
+      const replies = r.replies.filter((ev: unknown) => ev instanceof Reply).length;
+      inRange(spec.replies ?? {}, replies, 'replies');
+      if ('closed' in spec) {
+        const got = r.closed === null ? null : { code: r.closed.code, reopen: r.closed.reopen };
+        if (!same(spec.closed, got)) throw new Error(`${path}.closed: expected ${short(spec.closed)}, got ${short(got)}`);
+      }
+      return;
+    }
+    default:
+      throw new Error(`${path}: unknown result kind ${spec.result}`);
+  }
+}
+
+async function runSteps(c: Json, client: DecisionNode, session: string, events: Json[]): Promise<void> {
+  const ctx: Json = {};
+  const recorded = new Set<unknown>();
+  for (const [i, step] of (c.steps as Json[]).entries()) {
+    const where = `steps[${i}]`;
+    if ('call' in step) {
+      let result: unknown;
+      try {
+        result = await invoke(client, step.call, ctx);
+      } catch (err) {
+        result = err;
+      }
+      if ('outcome' in step) await checkOutcome(step.outcome, result, `${where}.outcome`);
+      else if (result instanceof Error) throw new Error(`${where}: the call raised ${result.name}: ${result.message}`);
+      if ('save_as' in step) ctx[step.save_as] = result;
+    } else if ('connect' in step) {
+      try {
+        await (ctx[step.connect] as Session).connect();
+      } catch (err) {
+        if (!(err instanceof SessionClosed)) throw err;
+        // A refused handshake may surface here or as the first event: both count once.
+        events.push(normEvent(err));
+        recorded.add(err);
+      }
+    } else if ('send' in step) {
+      const { session: name, ...args } = step.send;
+      await (ctx[name] as Session).send(decode(args, ctx));
+    } else if ('read' in step) {
+      const s = ctx[step.read.session] as Session;
+      let count: number | undefined = step.read.count;
+      for (;;) {
+        let ev: unknown;
+        try {
+          ev = await s.next({ timeout: step.read.timeout_ms ?? 10_000 });
+        } catch {
+          throw new Error(`${where}: no session event arrived in time (${events.length} read so far)`);
+        }
+        if (ev instanceof SessionClosed && recorded.has(ev)) break;
+        events.push(normEvent(ev));
+        if (ev instanceof SessionClosed) break;
+        if (count !== undefined && --count === 0) break;
+      }
+    } else if ('end' in step) {
+      try {
+        await (ctx[step.end] as Session).end();
+        events.push({ ended: true });
+      } catch (err) {
+        events.push({ end_error: { class: (err as Error).name, status: (err as DecisionNodeError).status } });
+      }
+    } else if ('close' in step) {
+      (ctx[step.close] as Session).close();
+    } else if ('mock_clock' in step) {
+      await mockClock(session, step.mock_clock);
+    } else if ('sleep_ms' in step) {
+      await sleepMs(step.sleep_ms);
+    } else {
+      throw new Error(`${where}: unknown step ${short(Object.keys(step))}`);
+    }
+  }
+}
+
+function checkSequence(expected: Json[], log: Json[]): void {
+  const got = log.map((r) => `${r.method} ${r.path}`);
+  if (expected.length !== log.length) throw new Error(`request sequence: expected ${expected.length} requests, the mock received ${log.length}: ${short(got)}`);
+  expected.forEach((spec, i) => {
+    const rec = log[i];
+    if (rec.method !== spec.method) throw new Error(`request sequence[${i}]: expected ${spec.method}, got ${got[i]}`);
+    if ('path' in spec && rec.path !== spec.path) throw new Error(`request sequence[${i}]: expected ${spec.method} ${spec.path}, got ${got[i]}`);
+    if ('path_pattern' in spec && !new RegExp(spec.path_pattern).test(rec.path)) throw new Error(`request sequence[${i}]: ${got[i]} does not match ${spec.path_pattern}`);
+    if ('status' in spec && rec.status !== spec.status) throw new Error(`request sequence[${i}]: ${got[i]} answered ${rec.status}, expected ${spec.status}`);
+    const keys = ['headers', 'header_patterns', 'absent_headers', 'body_checks', 'jsonl_count', 'jsonl_checks', 'body_base64', 'body_sha256', 'query'];
+    const checks = Object.fromEntries(Object.entries(spec).filter(([k]) => keys.includes(k)));
+    if (Object.keys(checks).length > 0) checkRequest({ ...checks, method: spec.method, any_body: true }, rec, `request sequence[${i}]`);
+  });
+}
+
+function checkCounts(expected: Json[], log: Json[]): void {
+  for (const spec of expected) {
+    const n = log.filter(
+      (r) =>
+        r.method === spec.method &&
+        (!('path' in spec) || r.path === spec.path) &&
+        (!('path_pattern' in spec) || new RegExp(spec.path_pattern).test(r.path)),
+    ).length;
+    const what = `${spec.method} ${spec.path ?? spec.path_pattern}`;
+    if ('count' in spec && n !== spec.count) throw new Error(`${what}: expected ${spec.count} requests, got ${n}`);
+    inRange(Object.fromEntries(Object.entries(spec).filter(([k]) => k === 'min' || k === 'max')), n, what);
+  }
+}
+
+function checkEvents(expected: Json[], events: Json[]): void {
+  if (expected.length !== events.length) throw new Error(`session events: expected ${expected.length}, got ${events.length}: ${short(events)}`);
+  expected.forEach((spec, i) => {
+    const ev = events[i];
+    if (!same(Object.keys(spec), Object.keys(ev))) throw new Error(`session events[${i}]: expected ${Object.keys(spec)[0]}, got ${short(ev)}`);
+    const key = Object.keys(spec)[0]!;
+    if (spec[key] && typeof spec[key] === 'object') match(spec[key], ev[key], `session events[${i}].${key}`);
+    else if (!same(spec[key], ev[key])) throw new Error(`session events[${i}]: expected ${short(spec)}, got ${short(ev)}`);
+  });
 }
 
 async function runBehaviour(c: Json): Promise<void> {
@@ -445,46 +863,57 @@ async function runBehaviour(c: Json): Promise<void> {
   const extra: Record<string, string> = { 'x-mock-session': session };
   if (c.mock) extra['x-mock-scenario'] = `behaviour/${c.id}`;
   const exp = c.expect;
-  // For scheduled_waits_ms the wait between attempts is recorded, not slept,
+  // For scheduled_waits_ms the client's waits are recorded, not slept,
   // so a capped 60 s wait is checked without the test taking 60 s.
   const scheduled: number[] = [];
   const recorder = 'scheduled_waits_ms' in exp ? async (ms: number) => void scheduled.push(ms) : undefined;
+  const events: Json[] = [];
   const started = performance.now();
   let result: unknown;
   try {
     // Constructing the client is inside: a bad argument fails there, before any request.
     const client = makeClient(c, mockUrl, extra, recorder);
-    result = await invoke(client, c.call);
+    if ('steps' in c) {
+      await runSteps(c, client, session, events);
+      result = null;
+    } else {
+      result = await invoke(client, c.call);
+    }
   } catch (err) {
     result = err;
   }
   const elapsed = performance.now() - started;
-  await new Promise((r) => setTimeout(r, 50)); // let the mock finish recording dropped connections
+  await sleepMs(50); // let the mock finish recording dropped connections
   const info = await mockLog(session);
   const log = info.requests;
   if ('one_of' in exp) {
     // The rule allows more than one way to comply; one of them must hold whole.
     const reasons: string[] = [];
-    const ok = (exp.one_of as Json[]).some((alt, i) => {
+    let ok = false;
+    for (const [i, alt] of (exp.one_of as Json[]).entries()) {
       try {
         if (log.length !== alt.attempts) throw new Error(`attempts: expected ${alt.attempts}, the mock received ${log.length}`);
-        checkOutcome(alt.outcome, result, 'outcome');
-        return true;
+        await checkOutcome(alt.outcome, result, 'outcome');
+        ok = true;
+        break;
       } catch (err) {
         reasons.push(`one_of[${i}]: ${(err as Error).message}`);
-        return false;
       }
-    });
+    }
     if (!ok) throw new Error(reasons.join('; '));
-  } else if (log.length !== exp.attempts) {
-    throw new Error(`attempts: expected ${exp.attempts}, the mock received ${log.length}`);
+  } else if ('attempts' in exp && log.length !== exp.attempts) {
+    throw new Error(`attempts: expected ${exp.attempts}, the mock received ${log.length}: ${short(log.map((r: Json) => `${r.method} ${r.path}`))}`);
   }
-  if ('outcome' in exp) checkOutcome(exp.outcome, result, 'outcome');
+  if ('request_sequence' in exp) checkSequence(exp.request_sequence, log);
+  if ('request_counts' in exp) checkCounts(exp.request_counts, log);
+  if ('session_events' in exp) checkEvents(exp.session_events, events);
+  if ('pongs' in exp) inRange(exp.pongs, info.pongs, 'pongs');
+  if ('outcome' in exp) await checkOutcome(exp.outcome, result, 'outcome');
   if ('results' in exp) {
     if (!Array.isArray(result) || result.length !== exp.results.length) {
       throw new Error(`results: expected ${exp.results.length} results, got ${result instanceof Error ? result.message : short(result)}`);
     }
-    exp.results.forEach((spec: Json, i: number) => checkOutcome(spec, result[i], `results[${i}]`));
+    for (const [i, spec] of (exp.results as Json[]).entries()) await checkOutcome(spec, result[i], `results[${i}]`);
   }
   if ('gaps_ms' in exp) {
     const times: number[] = log.map((r: Json) => r.time);
@@ -494,10 +923,11 @@ async function runBehaviour(c: Json): Promise<void> {
   if ('max_in_flight' in exp) inRange(exp.max_in_flight, info.max_in_flight, 'max in flight');
   if ('scheduled_waits_ms' in exp) {
     if (scheduled.length !== exp.scheduled_waits_ms.length) {
-      throw new Error(`scheduled waits: expected ${exp.scheduled_waits_ms.length}, the client scheduled ${scheduled.length}`);
+      throw new Error(`scheduled waits: expected ${exp.scheduled_waits_ms.length}, the client scheduled ${scheduled.length}: ${short(scheduled)}`);
     }
     exp.scheduled_waits_ms.forEach((r: Json, i: number) => inRange(r, scheduled[i]!, `scheduled wait ${i + 1} (ms)`));
   }
+  if ('steps' in c && result instanceof Error) throw new Error(`the steps raised ${result.name}: ${result.message}`);
   for (const path of (exp.unrequested_paths ?? []) as string[]) {
     const hits = (await mockLog('*', path)).requests;
     if (hits.length) throw new Error(`${path} was requested ${hits.length} time(s); it must not be requested at all`);
@@ -516,7 +946,7 @@ const RUNNERS = { requests: runRequest, responses: runResponse, errors: runError
 for (const kind of KINDS) {
   describe(`conformance: ${kind}`, () => {
     for (const c of loadCases(kind)) {
-      it(c.id, () => RUNNERS[kind](c), 30_000);
+      it(c.id, () => RUNNERS[kind](c), 60_000);
     }
   });
 }
