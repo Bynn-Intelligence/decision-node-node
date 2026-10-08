@@ -2,6 +2,7 @@ export {
   DecisionNode,
   DEFAULT_BASE_URL,
   DEFAULT_CONCURRENCY,
+  DEFAULT_INLINE_THRESHOLD,
   DEFAULT_MAX_RETRIES,
   DEFAULT_MODEL,
   DEFAULT_TIMEOUT,
@@ -14,6 +15,7 @@ export {
   type GateAnswers,
   type GateParams,
   type ImageInput,
+  type NumberParams,
   type RequestOptions,
   type ScoreParams,
   type SleepFn,
@@ -47,7 +49,20 @@ export {
   type ModelSessions,
   type Usage,
 } from './answers.js';
-export { Image, sniffMediaType, type ImageBytes, type ImageMediaType, type ImageSource, type WireImage } from './image.js';
+export {
+  Image,
+  MAX_IMAGES,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGE_PIXELS,
+  MAX_IMAGE_URL_CHARS,
+  imageDimensions,
+  sniffMediaType,
+  type ImageBytes,
+  type ImageMediaType,
+  type ImageSource,
+  type WireImage,
+} from './image.js';
+export { MAX_CHOICE_OPTIONS, MAX_GRID_VALUES, MAX_SCORE_LEVELS } from './checks.js';
 export { parseSafety, type CheckedSafety, type Safety, type UncheckedSafety } from './safety.js';
 export {
   AuthenticationError,

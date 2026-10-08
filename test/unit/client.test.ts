@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   AuthenticationError,
+  BadRequestError,
   ChoiceAnswer,
   ConnectionError,
   DecisionNode,
@@ -192,7 +193,7 @@ describe('decide', () => {
     expect(images[3]).toEqual({ id: 'd', url: 'https://example.com/d.jpg' });
   });
 
-  it('reads an image file when the Image is made, and fails there when it cannot', () => {
+  it('reads an image file when the Image is made, and fails there when it cannot', async () => {
     expect(() => Image.fromPath('x', '/nonexistent/receipt.jpg')).toThrow(TypeError);
     const dir = mkdtempSync(join(tmpdir(), 'dn-img-'));
     const file = join(dir, 'pixel.png');
@@ -200,20 +201,30 @@ describe('decide', () => {
     const img = Image.fromPath('p', file);
     expect(img.mediaType).toBe('image/png');
     writeFileSync(file, 'not an image');
-    expect(() => Image.fromPath('t', file)).toThrow(TypeError);
+    // Readable but not an image: the API's own error, before anything is sent.
+    const { dn, calls } = client([OK_TRUTH]);
+    const err = await dn.decide({ questions: { q: truth('?') }, images: [Image.fromPath('t', file)] }).catch((e) => e);
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err.status).toBeNull();
+    expect(err.requestId).toBeNull();
+    expect(err.errorType).toBe('api_usage_error');
+    expect(calls).toHaveLength(0);
   });
 
-  it('detects the media type of bytes given without one, and refuses an unknown format', async () => {
+  it('detects the media type of bytes given without one, and refuses an unknown format locally', async () => {
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0]);
     const webp = new TextEncoder().encode('RIFF\0\0\0\0WEBPVP8 ');
     expect(Image.fromBytes('a', PNG).mediaType).toBe('image/png');
     expect(Image.fromBytes('b', jpeg).mediaType).toBe('image/jpeg');
     expect(Image.fromBytes('c', webp.buffer).mediaType).toBe('image/webp');
-    expect(() => Image.fromBytes('x', new Uint8Array([1, 2, 3]))).toThrow(TypeError);
+    expect(Image.fromBytes('x', new Uint8Array([1, 2, 3])).mediaType).toBeUndefined();
     const { dn, calls } = client([OK_TRUTH]);
     await expect(
+      dn.decide({ questions: { q: truth('?') }, images: [Image.fromBytes('x', new Uint8Array([1, 2, 3]))] }),
+    ).rejects.toBeInstanceOf(BadRequestError);
+    await expect(
       dn.decide({ questions: { q: truth('?') }, images: [Image.fromBytes('y', new Blob([new Uint8Array([1, 2, 3])]))] }),
-    ).rejects.toBeInstanceOf(TypeError);
+    ).rejects.toBeInstanceOf(BadRequestError);
     expect(calls).toHaveLength(0);
   });
 

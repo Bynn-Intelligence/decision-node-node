@@ -3,23 +3,31 @@ import {
   ChoiceAnswer,
   Decision,
   ModelInfo,
+  NumberAnswer,
   ScoreAnswer,
   TruthAnswer,
   type AnswersFor,
   type DecisionResult,
 } from './answers.js';
+import { BadRequestError, DecisionNodeError, ServerError } from './errors.js';
+import { Image } from './image.js';
+import { choice, number as numberQuestion, score as scoreQuestion, truth, type Questions } from './questions.js';
+import { checkQuestionMap, prepare, withImages, type Prepared } from './request.js';
 import {
-  AuthenticationError,
-  ConnectionError,
-  DecisionNodeError,
-  ServerError,
-  TimeoutError,
-  errorFromResponse,
-  retryAfterSeconds,
-} from './errors.js';
-import { Image, type WireImage } from './image.js';
-import { choice, score as scoreQuestion, truth, type Questions } from './questions.js';
-import { VERSION } from './version.js';
+  Transport,
+  checkBaseUrl,
+  checkTls,
+  readEnv,
+  serialise,
+  sleep,
+  type FetchLike,
+  type RawResponse,
+  type SleepFn,
+} from './transport.js';
+import { DEFAULT_INLINE_THRESHOLD, ImagePlacer, STALE_UPLOAD, type ImageInput } from './uploads.js';
+
+export { DEFAULT_INLINE_THRESHOLD };
+export type { FetchLike, ImageInput, SleepFn };
 
 export const DEFAULT_BASE_URL = 'https://api.decisionnode.com';
 export const DEFAULT_MODEL = 'decisionnode-latest';
@@ -27,14 +35,6 @@ export const DEFAULT_MODEL = 'decisionnode-latest';
 export const DEFAULT_TIMEOUT = 10_000;
 export const DEFAULT_MAX_RETRIES = 2;
 export const DEFAULT_CONCURRENCY = 8;
-
-const USER_AGENT = `decisionnode-node/${VERSION}`;
-const MAX_BACKOFF_SECONDS = 8;
-
-export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-
-/** Waits `ms` milliseconds, or rejects when `signal` aborts. */
-export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
 
 export interface ClientOptions {
   /** Your API key. Default: `DECISIONNODE_API_KEY`. An empty string counts as not given. */
@@ -57,8 +57,15 @@ export interface ClientOptions {
   timeout?: number;
   /** Retries after the first attempt, a whole number 0 or more. Default 2. */
   maxRetries?: number;
-  /** Extra headers sent on every request. */
+  /** Extra headers sent on every API request; never to the storage of an upload. */
   headers?: Record<string, string>;
+  /**
+   * Local images of one request that total
+   * under this many bytes go inline as base64; at or above it they are
+   * uploaded once and named by `upload_id`. A whole number 0 or more.
+   * Default `DEFAULT_INLINE_THRESHOLD` (524,288).
+   */
+  inlineThreshold?: number;
   /**
    * A `fetch` implementation to send requests with. Default: the global `fetch`.
    *
@@ -77,7 +84,7 @@ export interface ClientOptions {
    */
   fetchHonoursManualRedirect?: boolean;
   /**
-   * The wait between attempts. Default: a timer. Tests can pass their own to
+   * The wait between attempts and between upload retries. Default: a timer. Tests can pass their own to
    * record the waits instead of sleeping.
    */
   sleep?: SleepFn;
@@ -93,8 +100,6 @@ export interface RequestOptions {
   /** Cancels the call, retries and waits included. */
   signal?: AbortSignal;
 }
-
-export type ImageInput = Image | WireImage;
 
 export interface DecideParams<Q extends Questions = Questions> {
   /** What is judged: a string or any JSON value. Omitted means no state. */
@@ -139,6 +144,20 @@ export interface ScoreParams {
   model?: string | null;
 }
 
+export interface NumberParams {
+  state?: unknown;
+  /** What to count or read. Required. */
+  instructions: unknown;
+  /** The lowest value (server default 0). */
+  min?: number | null;
+  /** The highest value the grid may reach (server default 255). */
+  max?: number | null;
+  /** The spacing, above 0 (server default 1). */
+  step?: number | null;
+  images?: readonly ImageInput[] | null;
+  model?: string | null;
+}
+
 export interface GateParams {
   /** The action about to run, for example a command or a change description. */
   action: unknown;
@@ -159,133 +178,8 @@ export interface DecideManyOptions extends RequestOptions {
   concurrency?: number;
 }
 
-function readEnv(name: string): string | undefined {
-  try {
-    const value = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[name];
-    if (value) return value;
-  } catch {
-    // No process object, or access denied.
-  }
-  try {
-    const deno = (globalThis as { Deno?: { env?: { get(n: string): string | undefined } } }).Deno;
-    const value = deno?.env?.get(name);
-    if (value) return value;
-  } catch {
-    // Deno without env permission.
-  }
-  return undefined;
-}
-
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
-
-/** The base URL without a trailing slash; a `TypeError` unless it is https, or http on a loopback host. */
-function checkBaseUrl(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new TypeError(`baseUrl is not a URL: ${value}`);
-  }
-  // URL lowercases the scheme, so `HTTPS:` and `Http:` are checked like `https:` and `http:`.
-  const protocol = url.protocol;
-  if (protocol === 'http:' && !LOOPBACK_HOSTS.has(url.hostname)) {
-    throw new TypeError(
-      `baseUrl must use https; http is accepted only for localhost, 127.0.0.1 and ::1, got ${url.host}`,
-    );
-  }
-  if (protocol !== 'https:' && protocol !== 'http:') {
-    throw new TypeError(`baseUrl must use https, got ${protocol.slice(0, -1)}`);
-  }
-  return value.replace(/\/+$/, '');
-}
-
-/**
- * A `TypeError` when the process turns off TLS certificate checks
- * (`NODE_TLS_REJECT_UNAUTHORIZED=0`, honoured by Node and Bun) and the base URL
- * is `https`: a key is never sent over a connection whose certificate is unchecked.
- *
- * The scheme is read from the parsed URL, which lowercases it, so `HTTPS://` is
- * checked like `https://`. Only the environment variable can be seen: a
- * process-wide dispatcher installed by the caller that turns off
- * certificate checks is not detectable, and is the caller's responsibility.
- */
-function checkTls(baseUrl: string): void {
-  let protocol: string;
-  try {
-    protocol = new URL(baseUrl).protocol;
-  } catch {
-    // Not reachable after checkBaseUrl; refuse rather than skip the check.
-    throw new TypeError(`baseUrl is not a URL: ${baseUrl}`);
-  }
-  if (protocol !== 'https:') return;
-  const value = readEnv('NODE_TLS_REJECT_UNAUTHORIZED');
-  if (value !== undefined && value.trim() === '0') {
-    throw new TypeError(
-      'NODE_TLS_REJECT_UNAUTHORIZED=0 turns off TLS certificate checks; the client refuses to send a key to an https base URL without them',
-    );
-  }
-}
-
-/** True when `actual` (a response URL) is set and is not the URL that was requested. */
-function isOtherUrl(actual: string, requested: string): boolean {
-  if (!actual) return false;
-  try {
-    return new URL(actual).href !== new URL(requested).href;
-  } catch {
-    return true;
-  }
-}
-
-function backoffSeconds(attempt: number): number {
-  const base = Math.min(MAX_BACKOFF_SECONDS, 0.5 * 2 ** attempt);
-  return base * (0.75 + Math.random() * 0.25);
-}
-
-function abortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(abortReason(signal));
-      return;
-    }
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortReason(signal!));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-/** The request body as JSON text; a `TypeError` when it cannot be serialised. */
-function serialise(body: unknown): string {
-  let payload: string | undefined;
-  try {
-    payload = JSON.stringify(body);
-  } catch (cause) {
-    throw new TypeError('the request cannot be serialised as JSON', { cause });
-  }
-  if (payload === undefined) throw new TypeError('the request cannot be serialised as JSON');
-  return payload;
-}
-
-function isSuccess(status: number): boolean {
-  return status >= 200 && status <= 299;
-}
-
-function isRetryable(status: number): boolean {
-  return status === 408 || status === 429 || (status >= 500 && status <= 599);
-}
-
-function nowMs(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now();
-}
+/** The wire type `/v1/systemone` takes for a `truth` question. */
+const SYSTEMONE_TRUTH = 'noul';
 
 /** The gate's three fixed questions. */
 function gateQuestions() {
@@ -308,12 +202,13 @@ function gateQuestions() {
   };
 }
 
-interface RawResponse {
-  /** True when the answer was a redirect the client did not follow, or one the fetch implementation followed anyway. */
-  redirected?: boolean;
-  status: number;
-  headers: Record<string, string>;
-  text: string;
+/** The questions with every `truth` written as the wire type `/v1/systemone` takes. */
+function systemoneQuestions(questions: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [id, q] of Object.entries(questions)) {
+    out[id] = q && typeof q === 'object' && (q as { type?: unknown }).type === 'truth' ? { ...q, type: SYSTEMONE_TRUTH } : q;
+  }
+  return out;
 }
 
 /**
@@ -328,15 +223,13 @@ export class DecisionNode {
   readonly model: string;
   readonly timeout: number;
   readonly maxRetries: number;
-  readonly #apiKey: string | undefined;
-  readonly #headers: Record<string, string>;
-  readonly #fetch: FetchLike | undefined;
-  readonly #logger: ((line: string) => void) | undefined;
-  readonly #sleep: SleepFn;
+  readonly inlineThreshold: number;
+  readonly #transport: Transport;
+  readonly #placer: ImagePlacer;
 
   constructor(options: ClientOptions = {}) {
     // An empty string is "not given": the environment, then the default, applies.
-    this.#apiKey = options.apiKey || readEnv('DECISIONNODE_API_KEY');
+    const apiKey = options.apiKey || readEnv('DECISIONNODE_API_KEY');
     this.baseUrl = checkBaseUrl(options.baseUrl || readEnv('DECISIONNODE_BASE_URL') || DEFAULT_BASE_URL);
     this.model = options.model || readEnv('DECISIONNODE_MODEL') || DEFAULT_MODEL;
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
@@ -349,7 +242,11 @@ export class DecisionNode {
       throw new RangeError(`maxRetries must be a whole number 0 or more, got ${String(maxRetries)}`);
     }
     this.maxRetries = maxRetries;
-    this.#headers = { ...(options.headers ?? {}) };
+    const inlineThreshold = options.inlineThreshold ?? DEFAULT_INLINE_THRESHOLD;
+    if (typeof inlineThreshold !== 'number' || !Number.isInteger(inlineThreshold) || inlineThreshold < 0) {
+      throw new RangeError(`inlineThreshold must be a whole number 0 or more, got ${String(inlineThreshold)}`);
+    }
+    this.inlineThreshold = inlineThreshold;
     if (options.fetch !== undefined && options.fetch !== null) {
       if (typeof options.fetch !== 'function') {
         throw new TypeError('fetch must be a function');
@@ -362,9 +259,17 @@ export class DecisionNode {
       }
     }
     checkTls(this.baseUrl);
-    this.#fetch = options.fetch ?? undefined;
-    this.#logger = options.logger;
-    this.#sleep = options.sleep ?? sleep;
+    this.#transport = new Transport({
+      baseUrl: this.baseUrl,
+      apiKey,
+      timeout,
+      maxRetries,
+      headers: { ...(options.headers ?? {}) },
+      fetch: options.fetch ?? undefined,
+      logger: options.logger,
+      sleep: options.sleep ?? sleep,
+    });
+    this.#placer = new ImagePlacer(this.#transport, inlineThreshold);
   }
 
   /** One decision: sends `POST /v1/decide` and returns typed answers. */
@@ -372,17 +277,79 @@ export class DecisionNode {
     params: DecideParams<Q>,
     options: RequestOptions = {},
   ): Promise<Decision<AnswersFor<Q>>> {
-    const payload = serialise(await this.#decideBody(params));
-    const { decision } = await this.#decidePayload<AnswersFor<Q>>(payload, options.signal);
+    const prepared = await this.#prepareDecide(params);
+    const { decision } = await this.#send<AnswersFor<Q>>('/v1/decide', prepared, options.signal);
     return decision;
   }
 
-  async #decidePayload<A extends Record<string, Answer>>(
-    payload: string,
+  /**
+   * One decision on `POST /v1/systemone`. The model is always sent (the
+   * argument's, else the client's) and a `truth` question is written with the
+   * wire type that path takes; every answer reads as on `decide`.
+   */
+  async systemone<const Q extends Questions>(
+    params: DecideParams<Q>,
+    options: RequestOptions = {},
+  ): Promise<Decision<AnswersFor<Q>>> {
+    const prepared = await this.#prepareDecide(params, systemoneQuestions);
+    const { decision } = await this.#send<AnswersFor<Q>>('/v1/systemone', prepared, options.signal);
+    return decision;
+  }
+
+  /** The local checks and the body without images, before anything is sent. */
+  async #prepareDecide(
+    params: DecideParams<Questions>,
+    transform?: (questions: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<Prepared> {
+    if (params === null || typeof params !== 'object') {
+      throw new TypeError('a request must be an object with questions');
+    }
+    const questions = checkQuestionMap(params.questions);
+    const fields = {
+      model: params.model || this.model,
+      state: params.state === undefined || params.state === null ? '' : params.state,
+      questions: transform ? transform(questions) : questions,
+    };
+    return prepare(this.#placer, fields, params.images);
+  }
+
+  /**
+   * Places the images and sends. A request naming an upload this client placed
+   * that the API reports as stale (expired, consumed, not found, incomplete)
+   * drops those uploads from the cache, uploads again and is sent once more;
+   * that resend is not a retry.
+   */
+  async #send<A extends Record<string, Answer>>(
+    path: string,
+    prepared: Prepared,
     signal: AbortSignal | undefined,
   ): Promise<{ decision: Decision<A>; res: RawResponse }> {
-    const res = await this.#request('POST', '/v1/decide', payload, signal);
-    return { decision: new Decision<A>(this.#parseObject(res), res.headers), res };
+    for (let resend = 0; ; resend++) {
+      let payload = prepared.head;
+      let placed: Set<string> | null = null;
+      if (prepared.plan !== null) {
+        const p = await this.#placer.place(prepared.plan, signal);
+        payload = withImages(prepared.head, p.wires);
+        placed = p.placed;
+      }
+      try {
+        const res = await this.#transport.request({ method: 'POST', path, body: payload, signal });
+        return { decision: new Decision<A>(this.#transport.parseObject(res), res.headers), res };
+      } catch (err) {
+        if (
+          resend === 0 &&
+          placed !== null &&
+          placed.size > 0 &&
+          err instanceof BadRequestError &&
+          err.errorType !== null &&
+          STALE_UPLOAD.has(err.errorType)
+        ) {
+          this.#placer.drop(placed);
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 
   /**
@@ -396,8 +363,8 @@ export class DecisionNode {
     params: DecideParams<Questions>,
     signal: AbortSignal | undefined,
   ): Promise<T> {
-    const payload = serialise(await this.#decideBody(params));
-    const { decision, res } = await this.#decidePayload(payload, signal);
+    const prepared = await this.#prepareDecide(params);
+    const { decision, res } = await this.#send('/v1/decide', prepared, signal);
     const answer = (decision.answers as Record<string, Answer>)[id];
     if (answer instanceof kind) return answer;
     throw new ServerError(
@@ -415,9 +382,11 @@ export class DecisionNode {
   /**
    * Many decisions, at most `concurrency` in flight at once. Returns one entry
    * per request in input order: the `Decision`, or the error that request
-   * ended with. One failure does not stop the others. A `concurrency` below 1,
-   * or any invalid request, throws a `TypeError` or `RangeError` before
-   * anything is sent: every request is checked first.
+   * ended with. One failure does not stop the others. Every request is checked
+   * before anything is sent: a `concurrency` below 1 or a malformed request
+   * throws a `RangeError` or `TypeError`, and a request the API would refuse
+   * (an image, a question's limits) throws the API's own error class, for the
+   * whole call. Requests with the same image bytes share one upload.
    */
   async decideMany<const Q extends Questions>(
     requests: readonly DecideParams<Q>[],
@@ -431,16 +400,16 @@ export class DecisionNode {
       throw new TypeError('requests must be an array');
     }
     // Every request is checked and serialised before any is sent.
-    const payloads: string[] = [];
-    for (const request of requests) payloads.push(serialise(await this.#decideBody(request)));
+    const prepared: Prepared[] = [];
+    for (const request of requests) prepared.push(await this.#prepareDecide(request));
     const limit = Number.isFinite(concurrency) ? Math.floor(concurrency) : requests.length;
     const results: Array<DecisionResult<AnswersFor<Q>>> = new Array(requests.length);
     let next = 0;
     const worker = async () => {
-      while (next < payloads.length) {
+      while (next < prepared.length) {
         const i = next++;
         try {
-          results[i] = (await this.#decidePayload<AnswersFor<Q>>(payloads[i]!, options.signal)).decision;
+          results[i] = (await this.#send<AnswersFor<Q>>('/v1/decide', prepared[i]!, options.signal)).decision;
         } catch (err) {
           results[i] = err instanceof Error ? err : new DecisionNodeError(String(err), { cause: err });
         }
@@ -495,6 +464,21 @@ export class DecisionNode {
     );
   }
 
+  /** One `number` question, sent under the id `number`. */
+  async number(params: NumberParams, options: RequestOptions = {}): Promise<NumberAnswer> {
+    return this.#helper(
+      'number',
+      NumberAnswer,
+      {
+        state: params.state,
+        questions: { number: numberQuestion(params.instructions, params.min, params.max, params.step) },
+        images: params.images,
+        model: params.model,
+      },
+      options.signal,
+    );
+  }
+
   /**
    * Judges an action before it runs: a `risk` score (none to severe), a
    * `touches_production` truth, and a `verdict` choice of allow, confirm or block.
@@ -511,188 +495,42 @@ export class DecisionNode {
 
   /** The models your key may use, with their published limits (`GET /v1/models`). */
   async models(options: RequestOptions = {}): Promise<ModelInfo[]> {
-    const res = await this.#request('GET', '/v1/models', undefined, options.signal);
-    const body = this.#parseObject(res);
+    const { body } = await this.#transport.json({ method: 'GET', path: '/v1/models', signal: options.signal });
     const list = Array.isArray(body.models) ? body.models : [];
     return list.map((m) => new ModelInfo((m ?? {}) as Record<string, unknown>));
   }
 
   /**
+   * Uploads images whatever their size and returns the `upload_id` of each,
+   * in order: from the cache when this client uploaded the same bytes before,
+   * else from one presign and one `PUT` per image. Name an id later with
+   * `Image.fromUploadId`.
+   */
+  async upload(images: readonly Image[], options: RequestOptions = {}): Promise<string[]> {
+    if (!Array.isArray(images)) throw new TypeError('images must be an array');
+    for (const img of images) {
+      if (!(img instanceof Image) || !img.isLocal) {
+        throw new TypeError('upload takes images of local bytes: a path, bytes or base64');
+      }
+    }
+    const plan = await this.#placer.check(images);
+    if (plan === null) return [];
+    const locals = plan.slots.flatMap((s) => ('local' in s ? [s.local] : []));
+    return this.#placer.upload(locals, options.signal);
+  }
+
+  /**
    * Sends a body exactly as given to `POST /v1/decide` and returns the parsed
    * response body. Use it for an API field this SDK version does not know yet.
+   * Nothing in the body is checked or changed.
    */
   async decideRaw<T = unknown>(body: unknown, options: RequestOptions = {}): Promise<T> {
-    const res = await this.#request('POST', '/v1/decide', serialise(body), options.signal);
-    return this.#parseJson(res) as T;
-  }
-
-  async #decideBody(params: DecideParams<Questions>): Promise<Record<string, unknown>> {
-    if (params === null || typeof params !== 'object') {
-      throw new TypeError('a request must be an object with questions');
-    }
-    const questions = params.questions;
-    if (questions === null || typeof questions !== 'object' || Array.isArray(questions) || Object.keys(questions).length === 0) {
-      throw new TypeError('questions must hold at least one question');
-    }
-    const body: Record<string, unknown> = {
-      model: params.model || this.model,
-      state: params.state === undefined || params.state === null ? '' : params.state,
-      questions,
-    };
-    if (params.images && params.images.length > 0) {
-      body.images = await Promise.all(params.images.map((img) => (img instanceof Image ? img.toWire() : img)));
-    }
-    return body;
-  }
-
-  #parseJson(res: RawResponse): unknown {
-    try {
-      return JSON.parse(res.text);
-    } catch (cause) {
-      throw new ServerError('the response is not JSON', {
-        status: res.status,
-        requestId: res.headers['x-request-id'] ?? null,
-        body: res.text,
-        headers: res.headers,
-        cause,
-      });
-    }
-  }
-
-  #parseObject(res: RawResponse): Record<string, unknown> {
-    const body = this.#parseJson(res);
-    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-      throw new ServerError('the response is not a JSON object', {
-        status: res.status,
-        requestId: res.headers['x-request-id'] ?? null,
-        body,
-        headers: res.headers,
-      });
-    }
-    return body as Record<string, unknown>;
-  }
-
-  async #request(method: string, path: string, payload: string | undefined, signal?: AbortSignal): Promise<RawResponse> {
-    if (!this.#apiKey) {
-      throw new AuthenticationError('no API key: pass apiKey or set DECISIONNODE_API_KEY');
-    }
-    checkTls(this.baseUrl);
-    const headers: Record<string, string> = {
-      authorization: `Bearer ${this.#apiKey}`,
-      'user-agent': USER_AGENT,
-      accept: 'application/json',
-    };
-    if (payload !== undefined) headers['content-type'] = 'application/json';
-    for (const [k, v] of Object.entries(this.#headers)) headers[k.toLowerCase()] = v;
-
-    for (let attempt = 0; ; attempt++) {
-      if (signal?.aborted) throw abortReason(signal);
-      const started = nowMs();
-      let res: RawResponse;
-      try {
-        res = await this.#send(method, this.baseUrl + path, headers, payload, signal);
-      } catch (err) {
-        if (!(err instanceof ConnectionError || err instanceof TimeoutError)) throw err;
-        this.#log(method, path, err.name, null, started, attempt);
-        if (attempt >= this.maxRetries) throw err;
-        await this.#sleep(backoffSeconds(attempt) * 1000, signal);
-        continue;
-      }
-      this.#log(method, path, String(res.status), res.headers['x-request-id'] ?? null, started, attempt);
-      if (res.redirected) {
-        throw new DecisionNodeError('the server answered with a redirect, which is not followed', {
-          status: res.status >= 300 && res.status <= 399 ? res.status : null,
-          requestId: res.headers['x-request-id'] ?? null,
-          headers: res.headers,
-        });
-      }
-      if (isSuccess(res.status)) return res;
-      if (isRetryable(res.status) && attempt < this.maxRetries) {
-        const wait = retryAfterSeconds(res.headers) ?? backoffSeconds(attempt);
-        await this.#sleep(wait * 1000, signal);
-        continue;
-      }
-      throw errorFromResponse(res.status, res.headers, res.text);
-    }
-  }
-
-  async #send(
-    method: string,
-    url: string,
-    headers: Record<string, string>,
-    payload: string | undefined,
-    signal: AbortSignal | undefined,
-  ): Promise<RawResponse> {
-    const fetchImpl: FetchLike = this.#fetch ?? ((input, init) => globalThis.fetch(input, init));
-    const controller = new AbortController();
-    let timedOut = false;
-    let rejectAttempt: (reason: unknown) => void = () => {};
-    // One deadline for the whole attempt, from sending to the last byte of the
-    // body. The race also ends an attempt whose fetch ignores the signal.
-    const deadline = new Promise<never>((_, reject) => {
-      rejectAttempt = reject;
+    const res = await this.#transport.request({
+      method: 'POST',
+      path: '/v1/decide',
+      body: serialise(body),
+      signal: options.signal,
     });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-      rejectAttempt(new Error('timed out'));
-    }, this.timeout);
-    const onAbort = () => {
-      controller.abort(abortReason(signal!));
-      rejectAttempt(abortReason(signal!));
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-    try {
-      const attempt = async (): Promise<RawResponse> => {
-        // Redirects are never followed, so the key never goes to another URL or
-        // over plain HTTP. A 3xx comes back as itself and becomes an error.
-        const response = await fetchImpl(url, {
-          method,
-          headers,
-          body: payload,
-          signal: controller.signal,
-          redirect: 'manual',
-        });
-        if (response.type === 'opaqueredirect') {
-          // Browsers hide a redirect's status and headers behind status 0.
-          return { redirected: true, status: 0, headers: {}, text: '' };
-        }
-        const out: Record<string, string> = {};
-        response.headers.forEach((value, name) => {
-          out[name.toLowerCase()] = value;
-        });
-        if (response.redirected || isOtherUrl(response.url, url)) {
-          // A fetch implementation that followed a redirect despite
-          // `redirect: 'manual'`, or answered from another URL: the answer is
-          // refused, its body never read.
-          void response.body?.cancel().catch(() => {});
-          return { redirected: true, status: response.status, headers: out, text: '' };
-        }
-        const text = await response.text();
-        return { status: response.status, headers: out, text };
-      };
-      const pending = attempt();
-      // Once the deadline wins, a late failure of the abandoned attempt is expected.
-      pending.catch(() => {});
-      return await Promise.race([pending, deadline]);
-    } catch (cause) {
-      if (signal?.aborted) throw abortReason(signal);
-      if (timedOut) {
-        throw new TimeoutError(`no response within ${this.timeout} ms`, { cause });
-      }
-      const detail = cause instanceof Error ? (cause.cause instanceof Error ? cause.cause.message : cause.message) : String(cause);
-      throw new ConnectionError(`connection error: ${detail}`, { cause });
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
-    }
-  }
-
-  #log(method: string, path: string, status: string, requestId: string | null, started: number, attempt: number): void {
-    if (!this.#logger) return;
-    const ms = Math.round(nowMs() - started);
-    this.#logger(
-      `decisionnode ${method} ${path} ${status} ${requestId ?? '-'} ${ms}ms${attempt > 0 ? ` (retry ${attempt})` : ''}`,
-    );
+    return this.#transport.parseJson(res) as T;
   }
 }
