@@ -272,6 +272,9 @@ function decode(value: Json, ctx: Json = {}): Json {
           return resolveRef(raw, ctx);
         case '$text':
           return String(raw.repeat).repeat(raw.times);
+        case '$list':
+          // count copies of item, with {i} in its strings replaced by the 0-based index
+          return Array.from({ length: raw.count }, (_, i) => decode(withIndex(raw.item, i), ctx));
         case '$nest': {
           // The value inside `depth` arrays: [[[...value...]]]
           let out = decode(raw.value, ctx);
@@ -302,6 +305,13 @@ function decode(value: Json, ctx: Json = {}): Json {
   return value;
 }
 
+function withIndex(value: Json, i: number): Json {
+  if (typeof value === 'string') return value.split('{i}').join(String(i));
+  if (Array.isArray(value)) return value.map((v) => withIndex(v, i));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withIndex(v, i)]));
+  return value;
+}
+
 function decideParams(args: Json, ctx: Json): Json {
   const p: Json = { questions: decode(args.questions, ctx) };
   if ('state' in args) p.state = decode(args.state, ctx);
@@ -310,8 +320,9 @@ function decideParams(args: Json, ctx: Json): Json {
   return p;
 }
 
-function batchRequests(list: Json[], ctx: Json): Json[] {
-  return list.map(({ custom_id, ...rest }: Json) => ({ customId: custom_id, ...decideParams(rest, ctx) }));
+function batchRequests(list: Json, ctx: Json): Json[] {
+  const items: Json[] = Array.isArray(list) ? list : decode(list, ctx);
+  return items.map(({ custom_id, ...rest }: Json) => ({ customId: custom_id, ...decideParams(rest, ctx) }));
 }
 
 function sessionParams(args: Json, ctx: Json): Json {
@@ -330,8 +341,24 @@ function sessionParams(args: Json, ctx: Json): Json {
 
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const CHECKED: Record<string, string> = {
+  decide: 'decide',
+  systemone: 'systemone',
+  open_session: 'openSession',
+  'batches.create': 'batches.create',
+  'batches.add': 'batches.add',
+};
+
 async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise<Json> {
   const { method, args } = call;
+  if (call.check) {
+    // The same request handed to the SDK's check instead of being sent.
+    const name = CHECKED[method];
+    if (name === undefined) throw new Error(`no check for ${method}`);
+    const request =
+      method === 'open_session' ? sessionParams(args, ctx) : method.startsWith('batches.') ? batchRequests(args.requests ?? [], ctx) : decideParams(args, ctx);
+    return (client.checkRequest as (m: string, r: Json) => Promise<void>)(name, request);
+  }
   const common = (p: Json) => {
     if ('state' in args) p.state = decode(args.state, ctx);
     if ('images' in args) p.images = decode(args.images, ctx);
@@ -420,6 +447,7 @@ function makeClient(
   if (spec.timeout != null) opts.timeout = spec.timeout * 1000;
   if (spec.max_retries != null) opts.maxRetries = spec.max_retries;
   if (spec.inline_threshold != null) opts.inlineThreshold = spec.inline_threshold;
+  if (spec.upload_timeout != null) opts.uploadTimeout = spec.upload_timeout * 1000;
   if ('base_url' in spec) {
     if (spec.base_url != null) {
       opts.baseUrl = spec.base_url.replace('{mock_url}', mockUrl).replace('{mock_port}', new URL(mockUrl).port);
@@ -623,26 +651,41 @@ async function runRequest(c: Json): Promise<void> {
   }
 }
 
-async function checkBatchResults(expected: Json[], results: unknown, path: string): Promise<void> {
+async function checkResultsSpec(spec: Json, results: unknown, path: string): Promise<void> {
   if (!(results instanceof BatchResults)) throw new Error(`${path}: expected batch results, got ${short(results)}`);
   const list: BatchResult[] = await results.toArray();
+  if ('batch_results' in spec) checkBatchResultList(spec.batch_results, list, `${path}.batch_results`);
+  if ('count' in spec && list.length !== spec.count) throw new Error(`${path}: expected ${spec.count} results, got ${list.length}`);
+  for (const sample of (spec.batch_results_sample ?? []) as Json[]) {
+    const { index, ...rest } = sample;
+    if (index >= list.length) throw new Error(`${path}: no result ${index} of ${list.length}`);
+    checkBatchResult(rest, list[index]!, `${path}.batch_results[${index}]`);
+  }
+}
+
+async function checkBatchResults(expected: Json[], results: unknown, path: string): Promise<void> {
+  if (!(results instanceof BatchResults)) throw new Error(`${path}: expected batch results, got ${short(results)}`);
+  checkBatchResultList(expected, await results.toArray(), path);
+}
+
+function checkBatchResultList(expected: Json[], list: BatchResult[], path: string): void {
   if (list.length !== expected.length) throw new Error(`${path}: expected ${expected.length} results, got ${list.length}`);
-  expected.forEach((spec, i) => {
-    const r = list[i]!;
-    const where = `${path}[${i}]`;
-    if ('custom_id' in spec && !same(spec.custom_id, r.customId)) throw new Error(`${where}.custom_id: expected ${spec.custom_id}, got ${r.customId}`);
-    if ('status' in spec && !same(spec.status, r.status)) throw new Error(`${where}.status: expected ${spec.status}, got ${r.status}`);
-    if ('headers' in spec) match(spec.headers, r.headers, `${where}.headers`);
-    if ('decision' in spec && spec.decision !== null) {
-      if (r.decision === null) throw new Error(`${where}: expected a decision, got none`);
-      match(spec.decision, normDecision(r.decision), `${where}.decision`);
-    }
-    if ('error' in spec) {
-      if (r.error === null) throw new Error(`${where}: expected an error value, got none`);
-      checkError(spec.error, r.error, `${where}.error`);
-    }
-    if (spec.no_decision && r.decision !== null) throw new Error(`${where}: expected no decision`);
-  });
+  expected.forEach((spec, i) => checkBatchResult(spec, list[i]!, `${path}[${i}]`));
+}
+
+function checkBatchResult(spec: Json, r: BatchResult, where: string): void {
+  if ('custom_id' in spec && !same(spec.custom_id, r.customId)) throw new Error(`${where}.custom_id: expected ${spec.custom_id}, got ${r.customId}`);
+  if ('status' in spec && !same(spec.status, r.status)) throw new Error(`${where}.status: expected ${spec.status}, got ${r.status}`);
+  if ('headers' in spec) match(spec.headers, r.headers, `${where}.headers`);
+  if ('decision' in spec && spec.decision !== null) {
+    if (r.decision === null) throw new Error(`${where}: expected a decision, got none`);
+    match(spec.decision, normDecision(r.decision), `${where}.decision`);
+  }
+  if ('error' in spec) {
+    if (r.error === null) throw new Error(`${where}: expected an error value, got none`);
+    checkError(spec.error, r.error, `${where}.error`);
+  }
+  if (spec.no_decision && r.decision !== null) throw new Error(`${where}: expected no decision`);
 }
 
 async function runResponse(c: Json): Promise<void> {
@@ -740,11 +783,14 @@ async function checkOutcome(spec: Json, result: unknown, path: string): Promise<
       match(spec.batch_page ?? {}, r.raw, `${path}.batch_page`);
       return;
     case 'batch_results':
-      await checkBatchResults(spec.batch_results, r, `${path}.batch_results`);
+      await checkResultsSpec(spec, r, path);
       return;
     case 'batch_run':
       match(spec.batch ?? {}, r.batch.raw, `${path}.batch`);
-      if ('batch_results' in spec) await checkBatchResults(spec.batch_results, r.results, `${path}.batch_results`);
+      await checkResultsSpec(spec, r.results, path);
+      return;
+    case 'checked':
+      if (r !== undefined && r !== null) throw new Error(`${path}: the check returned ${short(r)}; a request that passes returns nothing`);
       return;
     case 'session':
       if (!(r instanceof Session)) throw new Error(`${path}: expected a Session, got ${short(r)}`);
@@ -797,17 +843,21 @@ async function runSteps(c: Json, client: DecisionNode, session: string, events: 
       }
     } else if ('send' in step) {
       const { session: name, ...args } = step.send;
+      const s = ctx[name] as Session;
       let refused: unknown;
+      let checked: unknown;
       try {
-        await (ctx[name] as Session).send(decode(args, ctx));
+        if (step.check) checked = await s.checkFrame(decode(args, ctx));
+        else await s.send(decode(args, ctx));
       } catch (err) {
         // A frame that breaks a fixed rule is refused locally and nothing is sent.
         if (!('outcome' in step)) throw err;
         refused = err;
       }
       if ('outcome' in step) {
-        if (refused === undefined) throw new Error(`${where}: expected ${short(step.outcome)}, the frame was sent`);
-        await checkOutcome(step.outcome, refused, `${where}.outcome`);
+        if (refused !== undefined) await checkOutcome(step.outcome, refused, `${where}.outcome`);
+        else if (step.check) await checkOutcome(step.outcome, checked, `${where}.outcome`);
+        else throw new Error(`${where}: expected ${short(step.outcome)}, the frame was sent`);
       }
     } else if ('read' in step) {
       const s = ctx[step.read.session] as Session;
