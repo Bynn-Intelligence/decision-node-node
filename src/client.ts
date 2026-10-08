@@ -9,10 +9,21 @@ import {
   type AnswersFor,
   type DecisionResult,
 } from './answers.js';
+import { checkQuestions } from './checks.js';
 import { BadRequestError, DecisionNodeError, ServerError } from './errors.js';
 import { Image } from './image.js';
 import { choice, number as numberQuestion, score as scoreQuestion, truth, type Questions } from './questions.js';
 import { checkQuestionMap, prepare, withImages, type Prepared } from './request.js';
+import {
+  Session,
+  supervise as runSupervise,
+  type Frame,
+  type FrameError,
+  type Reply,
+  type SessionClosed,
+  type SessionParams,
+  type SuperviseOptions,
+} from './sessions.js';
 import {
   Transport,
   checkBaseUrl,
@@ -57,10 +68,10 @@ export interface ClientOptions {
   timeout?: number;
   /** Retries after the first attempt, a whole number 0 or more. Default 2. */
   maxRetries?: number;
-  /** Extra headers sent on every API request; never to the storage of an upload. */
+  /** Extra headers sent on every API request and on a session's handshake; never to the storage of an upload. */
   headers?: Record<string, string>;
   /**
-   * Local images of one request that total
+   * Local images of one request (or session frame) that total
    * under this many bytes go inline as base64; at or above it they are
    * uploaded once and named by `upload_id`. A whole number 0 or more.
    * Default `DEFAULT_INLINE_THRESHOLD` (524,288).
@@ -84,7 +95,8 @@ export interface ClientOptions {
    */
   fetchHonoursManualRedirect?: boolean;
   /**
-   * The wait between attempts and between upload retries. Default: a timer. Tests can pass their own to
+   * The wait between attempts, between upload retries and before a session is
+   * reopened. Default: a timer. Tests can pass their own to
    * record the waits instead of sleeping.
    */
   sleep?: SleepFn;
@@ -517,6 +529,54 @@ export class DecisionNode {
     if (plan === null) return [];
     const locals = plan.slots.flatMap((s) => ('local' in s ? [s.local] : []));
     return this.#placer.upload(locals, options.signal);
+  }
+
+  /**
+   * Opens a session (`POST /v1/sessions`) with its fixed part: the questions,
+   * and optionally state, instructions, window and lifetime. The model is
+   * always sent. A `429` `session_limit_exceeded` is never retried and raises
+   * `SessionLimitError`. Then `connect()` the returned session.
+   */
+  async openSession(params: SessionParams, options: RequestOptions = {}): Promise<Session> {
+    if (params === null || typeof params !== 'object') throw new TypeError('openSession takes an object with questions');
+    const questions = checkQuestionMap(params.questions);
+    checkQuestions(questions);
+    const body: Record<string, unknown> = { model: params.model || this.model };
+    if (params.instructions !== undefined && params.instructions !== null) body.instructions = params.instructions;
+    if (params.state !== undefined && params.state !== null) body.state = params.state;
+    body.questions = questions;
+    if (params.window !== undefined && params.window !== null) body.window = params.window;
+    if (params.ttlSeconds !== undefined && params.ttlSeconds !== null) body.ttl_seconds = params.ttlSeconds;
+    const { body: raw } = await this.#transport.json({
+      method: 'POST',
+      path: '/v1/sessions',
+      body: serialise(body),
+      policy: 'session_open',
+      signal: options.signal,
+    });
+    return new Session({ transport: this.#transport, placer: this.#placer }, raw);
+  }
+
+  /**
+   * Runs a feed of frames through sessions opened with `body`, handing every
+   * reply and frame error to `onReply`, reopening when a session ends with a
+   * reopen code. Returns the last `SessionClosed`, or `null` when none was seen.
+   */
+  async supervise(
+    body: SessionParams,
+    feed: AsyncIterable<Frame> | Iterable<Frame>,
+    onReply: (event: Reply | FrameError) => void | Promise<void>,
+    options: SuperviseOptions = {},
+  ): Promise<SessionClosed | null> {
+    if (body === null || typeof body !== 'object') throw new TypeError('supervise takes the session body as an object');
+    checkQuestions(checkQuestionMap(body.questions));
+    return runSupervise(
+      () => this.openSession(body, { signal: options.signal }),
+      feed,
+      onReply,
+      this.#transport.sleep,
+      { ...options, timeout: this.timeout },
+    );
   }
 
   /**

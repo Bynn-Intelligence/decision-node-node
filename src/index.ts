@@ -63,6 +63,18 @@ export {
   type WireImage,
 } from './image.js';
 export { MAX_CHOICE_OPTIONS, MAX_GRID_VALUES, MAX_SCORE_LEVELS } from './checks.js';
+export {
+  FrameError,
+  REOPEN_CODES,
+  Reply,
+  Session,
+  SessionClosed,
+  type Frame,
+  type SafetyBody,
+  type SessionEvent,
+  type SessionParams,
+  type SuperviseOptions,
+} from './sessions.js';
 export { parseSafety, type CheckedSafety, type Safety, type UncheckedSafety } from './safety.js';
 export {
   AuthenticationError,
