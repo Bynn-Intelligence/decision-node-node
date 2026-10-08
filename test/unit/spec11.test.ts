@@ -24,6 +24,7 @@ import {
 import { checkQuestions, checkRequest, checkSessionOpen, gridSize } from '../../src/checks.js';
 import { errorFromResponse } from '../../src/errors.js';
 import { md5Js } from '../../src/hash.js';
+import { bunEnvProxy } from '../../src/sessions.js';
 
 const PNG = new Uint8Array(readFileSync(fileURLToPath(new URL('../fixtures/images/5x3.png', import.meta.url))));
 const BASE = 'https://api.example.test';
@@ -349,5 +350,66 @@ describe('batches', () => {
     expect(err).toBeInstanceOf(TimeoutError);
     expect(waits).toEqual([10_000, 30_000, 30_000]);
     await expect(dn.runBatch([], { pollInterval: 9_999 })).rejects.toBeInstanceOf(RangeError);
+  });
+});
+
+describe('checks without sending', () => {
+  it('checkRequest raises what sending raises and sends nothing, uploads included', async () => {
+    const api = fakeApi({});
+    const dn = client(api.fetch, { inlineThreshold: 0 });
+    await expect(dn.checkRequest('decide', { questions: { q: truth('?') }, images: [Image.fromBytes('a', PNG)] })).resolves.toBeUndefined();
+    await expect(dn.checkRequest('systemone', { questions: { n: number('How many?') } })).rejects.toBeInstanceOf(BadRequestError);
+    await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 65 })).rejects.toBeInstanceOf(ValidationError);
+    const repeated = [
+      { customId: 'a', questions: { q: truth('?') } },
+      { customId: 'a', questions: { q: truth('?') } },
+    ];
+    await expect(dn.checkRequest('batches.create', repeated)).rejects.toThrow('Line 2: custom_id "a" is already in the batch.');
+    await expect(dn.checkRequest('batches.add', [])).rejects.toThrow('The call holds no requests.');
+    await expect(dn.checkRequest('batches.create', [])).resolves.toBeUndefined();
+    await expect((dn.checkRequest as (m: string, r: unknown) => Promise<void>)('gate', {})).rejects.toBeInstanceOf(TypeError);
+    expect(api.calls).toHaveLength(0);
+  });
+
+  it('applies limits held from models() to a model named by its alias or version', async () => {
+    const entry = { name: 'decisionnode-1.0', version: 'decisionnode-1.0', alias: 'decisionnode-latest', sessions: { max_window: 16 }, number_max_grid_values: 0 };
+    const api = fakeApi({ 'GET /v1/models': () => ({ status: 200, body: { models: [entry] } }) });
+    const dn = client(api.fetch);
+    await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 17, model: 'decisionnode-latest' })).resolves.toBeUndefined();
+    await dn.models();
+    await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 17, model: 'decisionnode-latest' })).rejects.toBeInstanceOf(ValidationError);
+    await expect(dn.checkRequest('decide', { questions: { n: number('How many?') }, model: 'decisionnode-latest' })).rejects.toThrow(
+      'does not answer number questions',
+    );
+    await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 17, model: 'decisionnode-other' })).resolves.toBeUndefined();
+  });
+});
+
+describe('client options of 1.6', () => {
+  it('validates uploadTimeout and webSocketOptions', () => {
+    expect(() => new DecisionNode({ apiKey: 'k', uploadTimeout: 0 })).toThrow(RangeError);
+    expect(new DecisionNode({ apiKey: 'k' }).uploadTimeout).toBe(60_000);
+    expect(() => new DecisionNode({ apiKey: 'k', webSocketOptions: { rejectUnauthorized: false } })).toThrow(TypeError);
+    expect(() => new DecisionNode({ apiKey: 'k', webSocketOptions: { tls: { rejectUnauthorized: false } } })).toThrow(TypeError);
+    expect(() => new DecisionNode({ apiKey: 'k', webSocketOptions: { headers: {} } })).toThrow(TypeError);
+    expect(() => new DecisionNode({ apiKey: 'k', webSocketOptions: { dispatcher: {} } })).not.toThrow();
+  });
+
+  it('gives a Bun session socket the proxy its fetch reads from the environment', () => {
+    const g = globalThis as { Bun?: unknown };
+    const saved = { ...process.env };
+    g.Bun = {};
+    try {
+      process.env.HTTPS_PROXY = 'http://proxy.example.test:8080';
+      process.env.NO_PROXY = 'internal.example.test';
+      expect(bunEnvProxy('wss://api.example.test/v1/sessions/s/stream', {})).toBe('http://proxy.example.test:8080');
+      expect(bunEnvProxy('wss://api.internal.example.test/v1/sessions/s/stream', {})).toBeNull();
+      expect(bunEnvProxy('wss://api.example.test/v1/sessions/s/stream', { proxy: 'http://other:1' })).toBeNull();
+      expect(bunEnvProxy('ws://127.0.0.1:8787/v1/sessions/s/stream', {})).toBeNull();
+    } finally {
+      delete g.Bun;
+      process.env = saved;
+    }
+    expect(bunEnvProxy('wss://api.example.test/v1/sessions/s/stream', {})).toBeNull();
   });
 });

@@ -9,7 +9,7 @@ import {
   type AnswersFor,
   type DecisionResult,
 } from './answers.js';
-import { Batches, type BatchRequest, type BatchRun, type RunBatchOptions } from './batches.js';
+import { Batches, CHECK_REQUESTS, type BatchRequest, type BatchRun, type RunBatchOptions } from './batches.js';
 import { checkRequest, checkSessionOpen, type HeldLimits } from './checks.js';
 import { BadRequestError, DecisionNodeError, ServerError } from './errors.js';
 import { Image } from './image.js';
@@ -37,9 +37,9 @@ import {
   type RawResponse,
   type SleepFn,
 } from './transport.js';
-import { DEFAULT_INLINE_THRESHOLD, ImagePlacer, STALE_UPLOAD, type ImageInput } from './uploads.js';
+import { DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT, ImagePlacer, STALE_UPLOAD, type ImageInput } from './uploads.js';
 
-export { DEFAULT_INLINE_THRESHOLD };
+export { DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT };
 export type { ClockFn, FetchLike, ImageInput, SleepFn };
 
 export const DEFAULT_BASE_URL = 'https://api.decisionnode.com';
@@ -102,6 +102,21 @@ export interface ClientOptions {
    * record the waits instead of sleeping.
    */
   sleep?: SleepFn;
+  /**
+   * Milliseconds one storage PUT of an upload may take, apart from `timeout`:
+   * a large image on a slow uplink needs longer than a decision. Above 0.
+   * Default `DEFAULT_UPLOAD_TIMEOUT` (60,000).
+   */
+  uploadTimeout?: number;
+  /**
+   * Options merged into the session WebSocket's own, for a proxy or TLS
+   * settings the runtime's WebSocket takes: on Node 22 and later a `dispatcher`
+   * (an undici `ProxyAgent` or `Agent`), on Node 20 the `ws` options (`agent`,
+   * `ca`), on Bun `proxy` and `tls`. The handshake headers are always the SDK's.
+   * An option that turns off certificate checks (`rejectUnauthorized: false`)
+   * is refused with a `TypeError`.
+   */
+  webSocketOptions?: Record<string, unknown>;
   /**
    * The time, in epoch milliseconds, that upload URLs and cached uploads are
    * judged by. Default: `Date.now`. Tests can pass their own, synchronous or
@@ -198,6 +213,22 @@ export interface DecideManyOptions extends RequestOptions {
   concurrency?: number;
 }
 
+/** The calls `checkRequest` checks. */
+export type CheckedMethod = 'decide' | 'systemone' | 'openSession' | 'batches.create' | 'batches.add';
+
+/** The session WebSocket options, refused when they would turn off certificate checks. */
+function checkWebSocketOptions(options: unknown): Record<string, unknown> {
+  if (options === undefined || options === null) return {};
+  if (typeof options !== 'object' || Array.isArray(options)) throw new TypeError('webSocketOptions must be an object');
+  const o = options as Record<string, unknown>;
+  const tls = o.tls !== null && typeof o.tls === 'object' ? (o.tls as Record<string, unknown>) : {};
+  if (o.rejectUnauthorized === false || tls.rejectUnauthorized === false) {
+    throw new TypeError('webSocketOptions may not turn off TLS certificate checks');
+  }
+  if ('headers' in o) throw new TypeError("webSocketOptions may not set headers; use the client's headers option");
+  return { ...o };
+}
+
 /** The wire type `/v1/systemone` takes for a `truth` question. */
 const SYSTEMONE_TRUTH = 'noul';
 
@@ -244,6 +275,7 @@ export class DecisionNode {
   readonly timeout: number;
   readonly maxRetries: number;
   readonly inlineThreshold: number;
+  readonly uploadTimeout: number;
   /** The Batch API: `create`, `add`, `finalize`, `get`, `list`, `results`, `cancel` and `run`. */
   readonly batches: Batches;
   readonly #transport: Transport;
@@ -271,6 +303,12 @@ export class DecisionNode {
       throw new RangeError(`inlineThreshold must be a whole number 0 or more, got ${String(inlineThreshold)}`);
     }
     this.inlineThreshold = inlineThreshold;
+    const uploadTimeout = options.uploadTimeout ?? DEFAULT_UPLOAD_TIMEOUT;
+    if (typeof uploadTimeout !== 'number' || !(uploadTimeout > 0)) {
+      throw new RangeError(`uploadTimeout must be above 0 milliseconds, got ${String(uploadTimeout)}`);
+    }
+    this.uploadTimeout = uploadTimeout;
+    const webSocketOptions = checkWebSocketOptions(options.webSocketOptions);
     if (options.fetch !== undefined && options.fetch !== null) {
       if (typeof options.fetch !== 'function') {
         throw new TypeError('fetch must be a function');
@@ -293,6 +331,8 @@ export class DecisionNode {
       logger: options.logger,
       sleep: options.sleep ?? sleep,
       clock: options.clock ?? undefined,
+      uploadTimeout,
+      webSocketOptions,
     });
     this.#placer = new ImagePlacer(this.#transport, inlineThreshold);
     this.batches = new Batches({
@@ -561,6 +601,19 @@ export class DecisionNode {
    * `SessionLimitError`. Then `connect()` the returned session.
    */
   async openSession(params: SessionParams, options: RequestOptions = {}): Promise<Session> {
+    const body = this.#checkedSessionBody(params);
+    const { body: raw } = await this.#transport.json({
+      method: 'POST',
+      path: '/v1/sessions',
+      body: serialise(body),
+      policy: 'session_open',
+      signal: options.signal,
+    });
+    return new Session({ transport: this.#transport, placer: this.#placer, limits: (model) => this.#limits(model) }, raw);
+  }
+
+  /** The open body after the session checks. */
+  #checkedSessionBody(params: SessionParams): Record<string, unknown> {
     if (params === null || typeof params !== 'object') throw new TypeError('openSession takes an object with questions');
     const questions = checkQuestionMap(params.questions);
     const body: Record<string, unknown> = { model: params.model || this.model };
@@ -570,14 +623,42 @@ export class DecisionNode {
     if (params.window !== undefined && params.window !== null) body.window = params.window;
     if (params.ttlSeconds !== undefined && params.ttlSeconds !== null) body.ttl_seconds = params.ttlSeconds;
     checkSessionOpen(body, this.#limits(body.model as string));
-    const { body: raw } = await this.#transport.json({
-      method: 'POST',
-      path: '/v1/sessions',
-      body: serialise(body),
-      policy: 'session_open',
-      signal: options.signal,
-    });
-    return new Session({ transport: this.#transport, placer: this.#placer, limits: (model) => this.#limits(model) }, raw);
+    return body;
+  }
+
+  /**
+   * Runs every local check a call would run before sending, alone: the same
+   * checks, with the limits held from `models()`, and the same error. Nothing
+   * is sent and nothing is uploaded. Resolves when the request would be sent.
+   * For a session frame, see `Session.checkFrame`.
+   *
+   * ```ts
+   * await dn.checkRequest('decide', { state, questions, images });
+   * ```
+   */
+  checkRequest(method: 'decide' | 'systemone', request: DecideParams<Questions>): Promise<void>;
+  checkRequest(method: 'openSession', request: SessionParams): Promise<void>;
+  checkRequest(method: 'batches.create' | 'batches.add', requests: readonly BatchRequest[]): Promise<void>;
+  async checkRequest(method: CheckedMethod, request: unknown): Promise<void> {
+    switch (method) {
+      case 'decide':
+        await this.#prepareDecide(request as DecideParams<Questions>);
+        return;
+      case 'systemone':
+        await this.#prepareDecide(request as DecideParams<Questions>, systemoneQuestions);
+        return;
+      case 'openSession':
+        this.#checkedSessionBody(request as SessionParams);
+        return;
+      case 'batches.create':
+      case 'batches.add':
+        await this.batches[CHECK_REQUESTS](request as readonly BatchRequest[], method === 'batches.create');
+        return;
+      default:
+        throw new TypeError(
+          `checkRequest takes decide, systemone, openSession, batches.create or batches.add, got ${String(method)}`,
+        );
+    }
   }
 
   /**
@@ -613,7 +694,16 @@ export class DecisionNode {
   /** The `/v1/models` entry of a model, when this client holds it, for the local checks. */
   #limits(model?: string | null): HeldLimits {
     const name = model || this.model;
-    const entry = this.#held.get(name);
+    let entry = this.#held.get(name);
+    if (entry === undefined) {
+      // A name the list states as an entry's alias or pinned version holds that entry's limits.
+      for (const m of this.#held.values()) {
+        if (m.alias === name || m.version === name) {
+          entry = m;
+          break;
+        }
+      }
+    }
     return entry ? { ...entry, model: name } : {};
   }
 

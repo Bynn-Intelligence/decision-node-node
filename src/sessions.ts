@@ -135,7 +135,7 @@ interface Socket {
   close(code?: number): void;
 }
 
-type WebSocketCtor = new (url: string, options: { headers: Record<string, string> }) => {
+type WebSocketCtor = new (url: string, options: { headers: Record<string, string>; [option: string]: unknown }) => {
   binaryType: string;
   onopen: (() => void) | null;
   onmessage: ((ev: { data: unknown }) => void) | null;
@@ -183,6 +183,31 @@ function webSocketClass(): Promise<WebSocketCtor> {
     wsCtor = undefined;
   });
   return wsCtor;
+}
+
+/**
+ * On Bun, `fetch` takes its proxy from `HTTPS_PROXY` and `HTTP_PROXY` (and
+ * `NO_PROXY`) but the WebSocket does not, so the session's socket is given the
+ * same proxy explicitly. Elsewhere `null`: Node's WebSocket shares the global
+ * dispatcher with `fetch`, and Deno applies the variables to both itself.
+ */
+export function bunEnvProxy(url: string, options: Record<string, unknown>): string | null {
+  const g = globalThis as { Bun?: unknown; process?: { env?: Record<string, string | undefined> } };
+  if (g.Bun === undefined || 'proxy' in options) return null;
+  const env = g.process?.env ?? {};
+  const target = new URL(url);
+  if (isLoopbackHost(target.hostname)) return null;
+  const secure = target.protocol === 'wss:';
+  const proxy = secure ? env.https_proxy || env.HTTPS_PROXY : env.http_proxy || env.HTTP_PROXY;
+  if (!proxy) return null;
+  const noProxy = (env.no_proxy || env.NO_PROXY || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  const host = target.hostname.toLowerCase();
+  for (const rule of noProxy) {
+    if (rule === '*') return null;
+    const bare = rule.replace(/^\*?\./, '').replace(/:\d+$/, '');
+    if (host === bare || host.endsWith(`.${bare}`)) return null;
+  }
+  return proxy;
 }
 
 /** What a session needs from its client. */
@@ -261,11 +286,14 @@ export class Session {
     this.#closed = null;
     this.#events = [];
     const headers: Record<string, string> = { authorization: `Bearer ${key}`, 'user-agent': USER_AGENT, ...transport.customHeaders };
+    const socketOptions: Record<string, unknown> = { ...transport.webSocketOptions };
+    const envProxy = bunEnvProxy(url, socketOptions);
+    if (envProxy !== null) socketOptions.proxy = envProxy;
     await new Promise<void>((resolve, reject) => {
       let opened = false;
       let ws: InstanceType<WebSocketCtor>;
       try {
-        ws = new Ctor(url, { headers });
+        ws = new Ctor(url, { ...socketOptions, headers });
       } catch (cause) {
         // A WebSocket that reads the options as subprotocols takes no headers (older Deno, for one).
         reject(
@@ -377,6 +405,17 @@ export class Session {
       return this.#enqueue(async () => finish(undefined));
     }
     return this.#enqueue(async () => finish(await this.#frameImage(image)));
+  }
+
+  /**
+   * Runs every check `send` runs before writing a frame, alone: the frame's
+   * fixed rules and its image's. Throws the same error; writes nothing,
+   * uploads nothing and takes no `seq`. Resolves when `send` would send it.
+   */
+  async checkFrame(frame: Frame = {}): Promise<void> {
+    this.#checkFrame(frame);
+    const image = frame.image;
+    if (image instanceof Image) await this.#ctx.placer.check([image], this.#ctx.limits(this.model));
   }
 
   /**

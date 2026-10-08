@@ -98,4 +98,11 @@ export async function readme11() {
   }
   const page = await dn.batches.list({ limit: 10 });
   void page.nextOffset;
+
+  const checked = new DecisionNode({ uploadTimeout: 60_000, webSocketOptions: { dispatcher: {} } });
+  await checked.checkRequest('decide', { state: 's', questions: { q: truth('?') }, images: [Image.fromBytes('a', bytes)] });
+  await checked.checkRequest('systemone', { state: 's', questions: { q: truth('?') } });
+  await checked.checkRequest('openSession', { questions: { a: truth('?') }, window: 8 });
+  await checked.checkRequest('batches.create', [{ customId: 'a', questions: { q: truth('?') } }]);
+  await session.checkFrame({ frame: { battery: 0.3 }, questions: ['abort'] });
 }

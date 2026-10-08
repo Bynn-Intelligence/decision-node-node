@@ -65,6 +65,10 @@ export interface TransportOptions {
   logger: ((line: string) => void) | undefined;
   sleep: SleepFn;
   clock?: ClockFn;
+  /** Milliseconds for one storage PUT attempt. */
+  uploadTimeout?: number;
+  /** Options merged into the session WebSocket's own (a dispatcher, an agent, TLS settings). */
+  webSocketOptions?: Record<string, unknown>;
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -219,6 +223,8 @@ export class Transport {
   readonly timeout: number;
   readonly maxRetries: number;
   readonly sleep: SleepFn;
+  readonly uploadTimeout: number;
+  readonly webSocketOptions: Record<string, unknown>;
   readonly #clock: ClockFn;
   readonly #apiKey: string | undefined;
   /** The client's custom headers, names lower-cased. */
@@ -234,6 +240,8 @@ export class Transport {
     this.maxRetries = options.maxRetries;
     this.sleep = options.sleep;
     this.#clock = options.clock ?? Date.now;
+    this.uploadTimeout = options.uploadTimeout ?? 60_000;
+    this.webSocketOptions = options.webSocketOptions ?? {};
     this.#apiKey = options.apiKey;
     this.#fetch = options.fetch;
     this.#logger = options.logger;
@@ -320,6 +328,7 @@ export class Transport {
     payload: string | Uint8Array | undefined,
     signal: AbortSignal | undefined,
     stream = false,
+    timeout: number = this.timeout,
   ): Promise<RawResponse> {
     const fetchImpl: FetchLike = this.#fetch ?? ((input, init) => globalThis.fetch(input, init));
     const controller = new AbortController();
@@ -333,7 +342,7 @@ export class Transport {
       timedOut = true;
       controller.abort();
       rejectAttempt(new Error('timed out'));
-    }, this.timeout);
+    }, timeout);
     const onAbort = () => {
       controller.abort(abortReason(signal!));
       rejectAttempt(abortReason(signal!));
@@ -381,7 +390,7 @@ export class Transport {
       handedOver = false;
       if (signal?.aborted) throw abortReason(signal);
       if (timedOut) {
-        throw new TimeoutError(`no response within ${this.timeout} ms`, { cause });
+        throw new TimeoutError(`no response within ${timeout} ms`, { cause });
       }
       const detail = cause instanceof Error ? (cause.cause instanceof Error ? cause.cause.message : cause.message) : String(cause);
       throw new ConnectionError(`connection error: ${detail}`, { cause });

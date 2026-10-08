@@ -11,6 +11,9 @@ import { heldNumber } from './checks.js';
 import { Image, MAX_IMAGES, MAX_IMAGE_BYTES, checkImageUrl, toBase64, type LocalImage, type WireImage } from './image.js';
 import { backoffSeconds, isLoopbackHost, isSuccess, serialise, type Transport } from './transport.js';
 
+/** Milliseconds one storage PUT attempt may take, apart from the API attempt's timeout. */
+export const DEFAULT_UPLOAD_TIMEOUT = 60_000;
+
 /** Local images of one request totalling under this many bytes go inline as base64; at or above it they are uploaded. */
 export const DEFAULT_INLINE_THRESHOLD = 524_288;
 
@@ -269,7 +272,7 @@ export class ImagePlacer {
       let status: number;
       let text: string;
       try {
-        const res = await transport.send(up.method || 'PUT', up.url, headers, bytes, signal);
+        const res = await transport.send(up.method || 'PUT', up.url, headers, bytes, signal, false, transport.uploadTimeout);
         if (res.redirected) {
           throw new DecisionNodeError('the storage answered with a redirect, which is not followed', {
             status: res.status || null,

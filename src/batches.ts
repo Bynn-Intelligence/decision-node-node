@@ -284,6 +284,9 @@ interface Line {
   prepared: Prepared;
 }
 
+/** The batch requests' local checks, for the client's `checkRequest`. */
+export const CHECK_REQUESTS: unique symbol = Symbol('checkRequests');
+
 /** `client.batches`: the seven calls of the Batch API. */
 export class Batches {
   readonly #ctx: BatchContext;
@@ -484,6 +487,11 @@ export class Batches {
    * `custom_id` rules (lines numbered from 1 within the call), an empty add,
    * the limits the client holds for batches, then each line as a decide request.
    */
+  /** The checks `create` (or `add`, with `allowEmpty` false) runs before sending, alone. */
+  async [CHECK_REQUESTS](requests: readonly BatchRequest[], allowEmpty: boolean): Promise<void> {
+    await this.#prepareLines(requests, allowEmpty);
+  }
+
   async #prepareLines(requests: readonly BatchRequest[], allowEmpty: boolean): Promise<Line[]> {
     if (!Array.isArray(requests)) throw new TypeError('requests must be an array');
     if (requests.length === 0 && !allowEmpty) throw localError(BadRequestError, 'The call holds no requests.');
