@@ -254,7 +254,11 @@ export class Evidence<R extends Reading = Reading> {
   readonly latencyMs: number | null;
   /** The calls of this booster billed on this request; `null` when the server did not send it. */
   readonly billedCalls: number | null;
-  /** One reading per image read; empty unless `status` is `ok`. */
+  /**
+   * One reading per image the booster was to read. A picture it did not read
+   * (it timed out or failed) or could not decode (`readable` false) is an
+   * `UnknownReading` holding those fields; `status` says why.
+   */
   readonly results: R[];
   /** The entry as received. */
   readonly raw: unknown;

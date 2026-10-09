@@ -269,7 +269,7 @@ Boosters read images in every form (URL, inline or uploaded), and every question
 | `status` | `ok`; `timeout` (no answer in time); `error`; `skipped` (none of the request's images is one it reads) |
 | `latencyMs` | How long the booster took |
 | `billedCalls` | The calls of this booster billed on this request |
-| `results` | One reading per image read, empty unless `status` is `ok` |
+| `results` | One reading per image the booster was to read, each naming its `image`. A picture it did not read (it timed out or failed) or could not decode (`readable` false) is an `UnknownReading` holding those fields, and `status` says why |
 | `raw` | The entry as the API sent it |
 
 | Reading | Fields |
