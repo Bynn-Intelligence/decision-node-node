@@ -90,15 +90,15 @@ describe('the boosters option', () => {
         new Booster('ai_generated', { images: ['c3d4'], require: true }),
         new Booster('moderation', { require: false, options: { level: 'strict' } }),
         new Booster('faces'),
-        { booster: 'text', images: ['a1b2'] },
+        { name: 'text', images: ['a1b2'] },
       ],
     });
     expect(sent(calls[0]!.body).boosters).toEqual([
       'age',
-      { booster: 'ai_generated', images: ['c3d4'], require: true },
-      { booster: 'moderation', require: false, options: { level: 'strict' } },
-      { booster: 'faces' },
-      { booster: 'text', images: ['a1b2'] },
+      { name: 'ai_generated', images: ['c3d4'], require: true },
+      { name: 'moderation', require: false, options: { level: 'strict' } },
+      { name: 'faces' },
+      { name: 'text', images: ['a1b2'] },
     ]);
   });
 
@@ -140,7 +140,7 @@ describe('the boosters option', () => {
     expect((err as BadRequestError).message).toBe('Invalid request.');
     expect(calls).toHaveLength(0);
     await expect(
-      dn.checkRequest('decide', { questions: { q: truth('?') }, boosters: [{ booster: 'age', options: { x: deep as unknown[] } }] }),
+      dn.checkRequest('decide', { questions: { q: truth('?') }, boosters: [{ name: 'age', options: { x: deep as unknown[] } }] }),
     ).rejects.toBeInstanceOf(BadRequestError);
     // One level less is sent.
     await dn.decide({ questions: { q: truth('?') }, boosters: [new Booster('age', { options: { x: (deep as unknown[])[0] as unknown[] } })] });
@@ -179,7 +179,7 @@ describe('the boosters option', () => {
       { customId: 'b', questions: { q: truth('?') } },
     ]);
     const lines = batch.calls[0]!.body!.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
-    expect(lines[0]!.boosters).toEqual([{ booster: 'age', require: true }]);
+    expect(lines[0]!.boosters).toEqual([{ name: 'age', require: true }]);
     expect('boosters' in lines[1]!).toBe(false);
     await expect(
       batch.dn.checkRequest('batches.create', [{ customId: 'a', questions: { q: truth('?') }, boosters: ['age'] }]),

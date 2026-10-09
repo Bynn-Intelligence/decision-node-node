@@ -211,14 +211,14 @@ A booster is a specialist model that reads the request's images before the decis
 | `ai_generated` | Any picture | How likely the picture was made by an image generator, which generator most likely, and whether the file carries Content Credentials (C2PA) and who signed them |
 
 ```ts
-import { AgeReading, Booster, Image, truth } from '@bynn/decisionnode';
+import { AgeReading, Image, truth } from '@bynn/decisionnode';
 
 const d = await dn.decide({
   images: [
     Image.fromUrl('a1b2', 'https://files.example.com/a1b2.jpg'),
     Image.fromUrl('c3d4', 'https://files.example.com/c3d4.jpg'),
   ],
-  boosters: ['age', new Booster('ai_generated', { images: ['c3d4'], require: true })],
+  boosters: ['age', 'ai_generated'],
   questions: {
     adult: truth('Is the person in the first picture an adult?'),
     synthetic: truth('Is the second picture AI-generated?'),
@@ -234,12 +234,24 @@ for (const reading of age?.results ?? []) {
     reading.ageYears;                 // 27, between reading.low and reading.high
   }
 }
-d.evidence?.ai_generated?.results[0]; // an AiGeneratedReading: generated 0.93, method 'inference'
+d.evidence?.ai_generated?.results[1]; // an AiGeneratedReading: generated 0.93, method 'inference'
 d.usage.boosterTokens;                // the readings' share of usage.inputTokens
 d.usage.boosters;                     // the booster calls billed
 ```
 
-`boosters` takes up to 4 boosters, each named once, in the order you give: a name (`'age'`), a `Booster`, or the API's own object (`{ booster: 'age', images: ['a1b2'] }`). `new Booster(name, { images, require, options })` sets what a name alone cannot, and each setting is left out of the request when not given:
+`boosters` takes up to 4 booster names, each named once, in the order you give. A booster that needs a setting is a `Booster`. Here `ai_generated` reads only the second picture, and the request fails if it cannot:
+
+```ts
+import { Booster } from '@bynn/decisionnode';
+
+await dn.decide({
+  images,
+  boosters: ['age', new Booster('ai_generated', { images: ['c3d4'], require: true })],
+  questions,
+});
+```
+
+`new Booster(name, { images, require, options })` is sent as `{ name: 'ai_generated', images: ['c3d4'], require: true }`, each setting only when given; a plain object in that form works too:
 
 | Setting | |
 |---|---|

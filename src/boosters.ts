@@ -14,7 +14,7 @@ export type BoosterName = 'age' | 'ai_generated' | (string & {});
 
 /** A booster as the API takes it. */
 export interface WireBooster {
-  booster: string;
+  name: string;
   images?: readonly string[];
   require?: boolean;
   options?: Record<string, unknown>;
@@ -58,7 +58,7 @@ export class Booster {
 
   /** The booster as the API takes it, each setting only when given. */
   toJSON(): WireBooster {
-    const out: WireBooster = { booster: this.name };
+    const out: WireBooster = { name: this.name };
     if (this.images !== undefined) out.images = this.images;
     if (this.require !== undefined) out.require = this.require;
     if (this.options !== undefined) out.options = this.options;

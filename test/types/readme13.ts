@@ -20,7 +20,7 @@ export async function readme13() {
       Image.fromUrl('a1b2', 'https://files.example.com/a1b2.jpg'),
       Image.fromUrl('c3d4', 'https://files.example.com/c3d4.jpg'),
     ],
-    boosters: ['age', new Booster('ai_generated', { images: ['c3d4'], require: true })],
+    boosters: ['age', 'ai_generated'],
     questions: {
       adult: truth('Is the person in the first picture an adult?'),
       synthetic: truth('Is the second picture AI-generated?'),
@@ -37,7 +37,7 @@ export async function readme13() {
       void [years, typed.low, typed.high];
     }
   }
-  const generated = d.evidence?.ai_generated?.results[0];
+  const generated = d.evidence?.ai_generated?.results[1];
   if (generated instanceof AiGeneratedReading) {
     const top: string | undefined = generated.topGenerator?.name;
     void [generated.generated, generated.method, generated.c2paSigner, top];
@@ -45,8 +45,14 @@ export async function readme13() {
   const tokens: number | null = d.usage.boosterTokens;
   const calls: number | null = d.usage.boosters;
 
-  // Names this version does not know are sent as given, as are wire-form objects.
-  await dn.decide({ questions: { q: truth('?') }, boosters: ['moderation', { booster: 'age', images: ['a1b2'] }] });
+  // A booster that needs a setting; names this version does not know and
+  // wire-form objects are sent as given.
+  await dn.decide({
+    images: [Image.fromUrl('c3d4', 'https://files.example.com/c3d4.jpg')],
+    boosters: ['age', new Booster('ai_generated', { images: ['c3d4'], require: true })],
+    questions: { q: truth('?') },
+  });
+  await dn.decide({ questions: { q: truth('?') }, boosters: ['moderation', { name: 'age', images: ['a1b2'] }] });
 
   try {
     await dn.decide({ images: [], questions: { q: truth('?') }, boosters: [new Booster('age', { require: true })] });
