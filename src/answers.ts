@@ -1,3 +1,4 @@
+import { parseEvidence, type EvidenceByBooster } from './boosters.js';
 import { parseSafety, type Safety } from './safety.js';
 
 type RawAnswer = Record<string, unknown>;
@@ -275,6 +276,10 @@ export interface Usage {
   videoFrames: number | null;
   /** For a request with videos: the seconds of video read, as sent; `null` otherwise. */
   videoSeconds: number | null;
+  /** For a request that named boosters: the share of `inputTokens` the readings take; `null` otherwise. */
+  boosterTokens: number | null;
+  /** For a request that named boosters: the booster calls billed; `null` otherwise. */
+  boosters: number | null;
 }
 
 function count(value: unknown): number | null {
@@ -285,7 +290,7 @@ function count(value: unknown): number | null {
 export class Decision<A extends Record<string, Answer> = Record<string, Answer>> {
   /** Answers by question id. */
   readonly answers: A;
-  /** The resolved model version that answered. */
+  /** The resolved model version that answered; for a fine-tuned model its pinned name (`...@acme/fraud:3`). */
   readonly model: string;
   readonly usage: Usage;
   /** The `x-request-id` response header. */
@@ -301,6 +306,11 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
    * size), as sent; empty when it sent nothing.
    */
   readonly warnings: string[];
+  /**
+   * What each booster the request named did and read, by booster name in the
+   * request's order; `null` when the request named none.
+   */
+  readonly evidence: EvidenceByBooster | null;
 
   constructor(body: Record<string, unknown>, headers: Record<string, string>) {
     this.raw = body;
@@ -313,7 +323,10 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
       outputTokens: count(usage.output_tokens),
       videoFrames: count(usage.video_frames),
       videoSeconds: count(usage.video_seconds),
+      boosterTokens: count(usage.booster_tokens),
+      boosters: count(usage.boosters),
     };
+    this.evidence = parseEvidence(body.evidence);
     this.warnings = Array.isArray(body.warnings) ? body.warnings.filter((w): w is string => typeof w === 'string') : [];
     this.requestId = headers['x-request-id'] ?? null;
     const latency = headers['x-decisionnode-latency-ms'];
@@ -385,6 +398,18 @@ export class ModelInfo {
   readonly sessions: ModelSessions | null;
   /** Batch limits, wire names as published. */
   readonly batch: Record<string, unknown> | null;
+  /** `true` for one of your workspace's fine-tuned models; `null` on a catalogue entry. */
+  readonly fineTuned: boolean | null;
+  /** A fine-tuned model's base, by its pinned id; `null` on a catalogue entry. */
+  readonly base: string | null;
+  /** A fine-tuned model's version number (on a plain name, the version it resolves to); `null` on a catalogue entry. */
+  readonly adapterVersion: number | null;
+  /**
+   * A fine-tuned model's state: `deployed` (it answers decisions), `ready`
+   * (trained and passed its checks, not deployed), or a newer value as sent;
+   * `null` on a catalogue entry.
+   */
+  readonly status: 'deployed' | 'ready' | (string & {}) | null;
   /** The entry as parsed. */
   readonly raw: Record<string, unknown>;
 
@@ -405,5 +430,9 @@ export class ModelInfo {
     this.uploadMediaTypes = field(raw, 'upload_media_types', (v) => Array.isArray(v) && v.every((x) => typeof x === 'string'));
     this.sessions = field(raw, 'sessions', isObject);
     this.batch = field(raw, 'batch', isObject);
+    this.fineTuned = field(raw, 'fine_tuned', (v) => typeof v === 'boolean');
+    this.base = field(raw, 'base', (v) => typeof v === 'string');
+    this.adapterVersion = field(raw, 'adapter_version', (v) => typeof v === 'number' && Number.isInteger(v));
+    this.status = field(raw, 'status', (v) => typeof v === 'string');
   }
 }

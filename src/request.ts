@@ -3,6 +3,7 @@
  * then the body serialised once, so a request the API would refuse is refused
  * here with nothing sent. Images are placed later, per send.
  */
+import { boostersWire } from './boosters.js';
 import { checkRequest, entry, heldNumber, type Entry, type HeldLimits } from './checks.js';
 import { Image, MAX_IMAGES } from './image.js';
 import { MAX_VIDEOS } from './video.js';
@@ -28,7 +29,8 @@ export function checkQuestionMap(questions: unknown): Record<string, unknown> {
 /**
  * Checks and serialises one request. `fields` are the body's fields in order,
  * `questions` among them; `images` are checked after the questions, then the
- * `videos`, which are sent after the other fields (frames always inline).
+ * `videos`, which are sent after the other fields (frames always inline), then
+ * `boosters`, sent as given (none, or an empty list, leaves the key out).
  */
 export async function prepare(
   placer: ImagePlacer,
@@ -36,18 +38,24 @@ export async function prepare(
   images: readonly ImageInput[] | null | undefined,
   limits: HeldLimits = {},
   videos?: readonly VideoInput[] | null,
+  boosters?: unknown,
 ): Promise<Prepared> {
   checkQuestionMap(fields.questions);
   const wires = videoWires(videos);
-  // The images and videos count toward the nesting limit as the objects they will be.
+  const tail: Record<string, unknown> = {};
+  if (wires.length > 0) tail.videos = wires;
+  const boosterWire = boostersWire(boosters);
+  if (boosterWire !== undefined) tail.boosters = boosterWire;
+  // The images and videos count toward the nesting limit as the objects they will be, the boosters as sent.
   let probe = Array.isArray(images) && images.length > 0 ? { ...fields, images: images.map(() => ({ id: '' })) } : fields;
   if (wires.length > 0) probe = { ...probe, videos: wires.map(() => ({ id: '' })) };
+  if (boosterWire !== undefined) probe = { ...probe, boosters: boosterWire };
   // The request's image ids as given, for the point and box rules.
   const imageIds = Array.isArray(images) ? images.map((img) => (img !== null && typeof img === 'object' ? (img as { id?: unknown }).id : undefined)) : [];
   checkRequest(probe, limits, [], imageIds, countEntries(images ?? [], wires, limits));
   const plan = await placer.check(images, limits);
   checkVideos(wires, images);
-  return { head: serialise(wires.length > 0 ? { ...fields, videos: wires } : fields), plan };
+  return { head: serialise({ ...fields, ...tail }), plan };
 }
 
 /** The image limit: the held `/v1/models` entry's `max_images`, else its `images.max_images`, else 16. */

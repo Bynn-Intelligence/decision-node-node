@@ -1,3 +1,4 @@
+import { parseBoostersHeader, type BoosterStatus } from './boosters.js';
 import { parseSafety, type Safety } from './safety.js';
 
 export interface ErrorFields {
@@ -32,6 +33,12 @@ export class DecisionNodeError extends Error {
   readonly body: unknown;
   /** The response headers, names lower-cased. */
   readonly headers: Record<string, string>;
+  /**
+   * For a request that named boosters: each booster's status and time, by name
+   * in the request's order, from the `x-decisionnode-boosters` header, so you
+   * can see which required booster failed. Empty when the header is absent.
+   */
+  readonly boosters: Record<string, BoosterStatus>;
 
   constructor(message: string, fields: ErrorFields = {}) {
     super(message, fields.cause === undefined ? undefined : { cause: fields.cause });
@@ -41,6 +48,7 @@ export class DecisionNodeError extends Error {
     this.reason = fields.reason ?? null;
     this.body = fields.body;
     this.headers = fields.headers ?? {};
+    this.boosters = parseBoostersHeader(this.headers['x-decisionnode-boosters']);
   }
 }
 
@@ -56,7 +64,11 @@ export class AuthenticationError extends DecisionNodeError {}
 /** 402: the account has no credit left. */
 export class InsufficientCreditError extends DecisionNodeError {}
 
-/** 403 that is not a refusal. */
+/**
+ * 403 that is not a refusal: the workspace may not do this, for example use a
+ * booster that is turned off for it (`booster_not_enabled`), or the workspace
+ * is suspended. `errorType` tells them apart.
+ */
 export class PermissionDeniedError extends DecisionNodeError {}
 
 /** 403 `refusal_error`: the request was refused under the usage policy. Never retried. */
@@ -104,7 +116,11 @@ export class RateLimitError extends DecisionNodeError {
  */
 export class SessionLimitError extends RateLimitError {}
 
-/** 529: the service is overloaded. */
+/**
+ * 529: the service is overloaded, or a booster the request required failed or
+ * did not answer in time (`errorType` `booster_unavailable`). Retried like
+ * every 529.
+ */
 export class OverloadedError extends DecisionNodeError {
   /** Seconds the server asked to wait (at most 60), or `null`. */
   readonly retryAfter: number | null;

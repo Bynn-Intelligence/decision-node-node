@@ -13,6 +13,7 @@ import {
   retryAfterSeconds,
   type ErrorFields,
 } from './errors.js';
+import type { BoosterInput } from './boosters.js';
 import type { Questions } from './questions.js';
 import { heldNumber, type HeldLimits } from './checks.js';
 import { prepare, withImages, type Prepared } from './request.js';
@@ -41,6 +42,8 @@ export interface BatchRequest<Q extends Questions = Questions> {
   videos?: readonly VideoInput[] | null;
   /** Default: the client's model. */
   model?: string | null;
+  /** Boosters, as on `decide`: the line carries them as the live call does. */
+  boosters?: readonly BoosterInput[] | null;
 }
 
 export type BatchState = 'draft' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired';
@@ -530,7 +533,7 @@ export class Batches {
         questions: req.questions,
       };
       lines.push({
-        prepared: await prepare(this.#ctx.placer, fields, req.images, this.#ctx.limits(model), req.videos),
+        prepared: await prepare(this.#ctx.placer, fields, req.images, this.#ctx.limits(model), req.videos, req.boosters),
       });
     }
     return lines;

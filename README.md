@@ -199,6 +199,94 @@ The ids, times, media types, `fps` and the window are checked before anything is
 
 To turn a video file into frames, use the `dn` command-line tool (`dn truth "Does a person fall?" --video dock.mp4 --fps 2`); it runs FFmpeg on your machine and sends only the frames. This package has no such dependency.
 
+## Boosters
+
+A booster is a specialist model that reads the request's images before the decision. Its reading is added to what the model sees as evidence, and comes back in the response. The model still answers every question: a booster never answers one or adds one, and a request without boosters is answered exactly as before.
+
+| Booster | Reads | Tells the model |
+|---|---|---|
+| `age` | A picture of a person | How old the person is, with a range and a confidence (the largest face is read) |
+| `ai_generated` | Any picture | How likely the picture was made by an image generator, which generator most likely, and whether the file carries Content Credentials (C2PA) and who signed them |
+
+```ts
+import { AgeReading, Booster, Image, truth } from '@bynn/decisionnode';
+
+const d = await dn.decide({
+  images: [
+    Image.fromUrl('a1b2', 'https://files.example.com/a1b2.jpg'),
+    Image.fromUrl('c3d4', 'https://files.example.com/c3d4.jpg'),
+  ],
+  boosters: ['age', new Booster('ai_generated', { images: ['c3d4'], require: true })],
+  questions: {
+    adult: truth('Is the person in the first picture an adult?'),
+    synthetic: truth('Is the second picture AI-generated?'),
+  },
+});
+
+d.answers.adult.truth;                // 0.97
+d.answers.synthetic.truth;            // 0.91
+
+const age = d.evidence?.age;          // an Evidence: version 'age-v3', status 'ok', latencyMs, results
+for (const reading of age?.results ?? []) {
+  if (reading instanceof AgeReading && reading.faces > 0) {
+    reading.ageYears;                 // 27, between reading.low and reading.high
+  }
+}
+d.evidence?.ai_generated?.results[0]; // an AiGeneratedReading: generated 0.93, method 'inference'
+d.usage.boosterTokens;                // the readings' share of usage.inputTokens
+d.usage.boosters;                     // the booster calls billed
+```
+
+`boosters` takes up to 4 boosters, each named once, in the order you give: a name (`'age'`), a `Booster`, or the API's own object (`{ booster: 'age', images: ['a1b2'] }`). `new Booster(name, { images, require, options })` sets what a name alone cannot, and each setting is left out of the request when not given:
+
+| Setting | |
+|---|---|
+| `images` | The ids of the request's images the booster reads. Left out: every image |
+| `require` | `true`: a booster that fails or does not answer in time fails the request (see the errors below). Left out or `false`: the decision runs without that reading, and `evidence` says why |
+| `options` | The booster's own settings; neither of today's boosters has any |
+
+Boosters read images in every form (URL, inline or uploaded), and every question sees every reading. Which boosters exist and which your workspace may use is the API's to say, so nothing about `boosters` is checked before sending, and a name the API adds later works with this version. `decide`, the helpers, `decideMany` and batch requests take `boosters`; sessions do not. Without boosters (left out or an empty list) the request carries no `boosters` field.
+
+`decision.evidence` holds one `Evidence` per booster the request named, by name in the request's order, and is `null` for a request that named none:
+
+| Field | |
+|---|---|
+| `version` | The version of the booster that read, such as `age-v3` |
+| `status` | `ok`; `timeout` (no answer in time); `error`; `skipped` (none of the request's images is one it reads) |
+| `latencyMs` | How long the booster took |
+| `results` | One reading per image read, empty unless `status` is `ok` |
+| `raw` | The entry as the API sent it |
+
+| Reading | Fields |
+|---|---|
+| `AgeReading` | `image`, `faces` (how many faces were found; the largest is read), and `ageYears`, `low`, `high` (the range) and `confidence`, each `null` when `faces` is 0 |
+| `AiGeneratedReading` | `image`, `generated` (the probability that a generator made the picture), `confidence`, `method` (`inference`: read from the pixels; `c2pa`: the file's Content Credentials say so), `topGenerator` (`name` and `probability` of the likeliest generator), `c2paSigner` (who signed the Content Credentials, or `null`) |
+| `UnknownReading` | `image` and `raw`: a reading of a booster this version does not know, or one with a field missing or of the wrong type. The decision does not fail |
+
+Each reading also has `raw`. Numbers are passed through as received. `usage.boosterTokens` (the readings' share of `inputTokens`) and `usage.boosters` (the booster calls billed) are `null` for a request without boosters.
+
+A booster call costs USD 0.002, drawn from your prepaid balance with the request's tokens: one call per booster and image read with status `ok`. A booster that timed out or failed is free, a picture the same booster version read for your workspace in the last hour is not billed again, and a refused request pays for none of its boosters. The readings' tokens are input tokens at the model's price.
+
+| Status, `errorType` | Error | When |
+|---|---|---|
+| 400 `api_usage_error` | `BadRequestError`, the reason in `reason` | `boosters` is malformed: not a list, more than 4, a booster named twice, an unknown key in `options` |
+| 400 `booster_unknown` | `BadRequestError` | A name that is not a booster |
+| 400 `booster_input_mismatch` | `BadRequestError` | A booster that reads images on a request without any, or an `images` id that is not one of the request's images |
+| 403 `booster_not_enabled` | `PermissionDeniedError` | The booster is turned off for your workspace (in the console) |
+| 529 `booster_unavailable` | `OverloadedError` | A booster with `require: true` failed or did not answer in time. Retried like every 529 |
+
+Every error of a request that named boosters carries `boosters`, each booster's status and time by name, read from the `x-decisionnode-boosters` response header, so you can see which required booster failed:
+
+```ts
+try {
+  await dn.decide({ images, questions, boosters: [new Booster('age', { require: true })] });
+} catch (err) {
+  if (err instanceof OverloadedError && err.errorType === 'booster_unavailable') {
+    err.boosters.age?.status; // 'timeout' or 'error'
+  }
+}
+```
+
 ## The client
 
 ```ts
@@ -240,7 +328,7 @@ The base URL must use `https`; `http` is accepted only for `localhost`, `127.0.0
 
 An answer of a type this version does not know yet is an `UnknownAnswer` with every field in `raw`, and so is an answer of a known type with a field missing or of the wrong type: the decision does not fail. `check`, `classify`, `score` and `number` promise a typed answer instead, so when their own answer is missing or malformed they throw a `ServerError` with the status, `requestId` and the server's `reason` from `x-decisionnode-error`. Every method takes a last argument `{ signal }` to cancel the call with an `AbortSignal`.
 
-A `Decision` has `answers`, `model` (the version that answered), `usage.inputTokens`, `usage.outputTokens`, for a request with videos `usage.videoFrames` and `usage.videoSeconds` (`null` otherwise), `warnings` (what the API changed when it read the videos, an empty array when nothing), `requestId`, `latencyMs` (the server's time), `safety` and `raw` (the parsed body). A token count or latency the response did not carry is `null`, never 0. `decision.get('route')` reads one answer by id.
+A `Decision` has `answers`, `model` (the version that answered; for a fine-tuned model its pinned name), `usage.inputTokens`, `usage.outputTokens`, for a request with videos `usage.videoFrames` and `usage.videoSeconds` (`null` otherwise), for a request with boosters `evidence`, `usage.boosterTokens` and `usage.boosters` (`null` otherwise), `warnings` (what the API changed when it read the videos, an empty array when nothing), `requestId`, `latencyMs` (the server's time), `safety` and `raw` (the parsed body). A token count or latency the response did not carry is `null`, never 0. `decision.get('route')` reads one answer by id.
 
 ### Checked before sending
 
@@ -436,14 +524,16 @@ Every error is a `DecisionNodeError`, exported under that name, with `status`, `
 | 400 | `BadRequestError`; `ContextLimitError` when the request is over the model's token limit | |
 | 401 | `AuthenticationError` (also thrown before sending when no key is set) | |
 | 402 | `InsufficientCreditError` | |
-| 403 | `RefusalError` when the request was refused under the usage policy, else `PermissionDeniedError` | `category`, `safety` |
+| 403 | `RefusalError` when the request was refused under the usage policy (`category`, `safety`); every other 403 is a `PermissionDeniedError`: a booster turned off for your workspace (`booster_not_enabled`) or a suspended workspace, told apart by `errorType` | `category`, `safety` on a `RefusalError` |
 | 404 | `NotFoundError` | |
 | 422 | `ValidationError` | `entries` |
 | 429 | `RateLimitError`; `SessionLimitError` when the key holds as many sessions as it may | `retryAfter` (seconds, at most 60) |
-| 529 | `OverloadedError` | `retryAfter` (seconds, at most 60) |
+| 529 | `OverloadedError`, also when a required booster failed (`booster_unavailable`) | `retryAfter` (seconds, at most 60) |
 | other 5xx, a 2xx whose body is not JSON, or a helper's own answer missing or malformed | `ServerError` | |
 | no response | `ConnectionError`, `TimeoutError` | |
 | any other status: 3xx, 405, 409, 410, 408 after its retries | `DecisionNodeError` itself | |
+
+Every error also has `boosters`: for a request that named boosters, each booster's status and time from the `x-decisionnode-boosters` header (see "Boosters"); an empty object otherwise.
 
 A failed upload to storage is a `DecisionNodeError` with the storage's status, `errorType` `upload_failed`, and the storage's error code in `reason`. Batch errors with their own `errorType` (`batch_limit_exceeded`, `invalid_batch_state`, `results_not_ready`, `results_expired`) use the classes above by status.
 
@@ -509,6 +599,19 @@ models.map((m) => [m.name, m.limits]);
 
 Limits differ by model version; `models()` returns each model's published limits in `limits`, wire names as sent. The number, upload, session and batch limits are also typed fields: `numberOneQuestionValues`, `numberMaxGridValues`, `numberDefaultRange`, `numberDefaultStep`, `uploadMaxBytes`, `uploadTtlSeconds`, `uploadMediaTypes`, `sessions` and `batch`, each `null` when a model does not publish it.
 
+### Fine-tuned models
+
+A model your workspace fine-tuned in the console is called by its name, `<base>@<workspace>/<name>`, which means the version deployed most recently, or `<base>@<workspace>/<name>:<n>` for one version:
+
+```ts
+const d = await dn.decide({ model: 'decisionnode-1.0-flash@acme/fraud', state, questions });
+d.model; // 'decisionnode-1.0-flash@acme/fraud:3', the version that answered
+```
+
+The name is sent as given, in `model` on any call or as the client's `model`. Only your workspace's keys can use it, and it answers like its base: the same question types, answers, limits and errors. A name that does not exist, a version that is not deployed and another workspace's model all throw `BadRequestError` with the message `Unknown model: <name>`.
+
+`models()` lists your workspace's fine-tuned models beside the catalogue. Their entries add `fineTuned` (`true`), `base` (the base model's pinned id), `adapterVersion` (the version number; on a plain name, the version it resolves to) and `status` (`deployed`, which answers decisions, or `ready`: trained and checked, not deployed). Each is `null` on a catalogue entry.
+
 ## Configuration
 
 | Setting | Option | Environment variable | Default |
@@ -522,7 +625,7 @@ Limits differ by model version; `models()` returns each model's published limits
 
 The client sends no telemetry and contacts nothing but the base URL, and the storage URLs the API returns for an upload. Besides your key, your own headers and the content headers, the only header it sends to the API is `User-Agent: decisionnode-node/<version>`. To see each attempt, pass `logger: (line) => console.debug(line)`: it prints the method, path, status, request id and time, never the state, the questions or the key.
 
-`SPEC_VERSION` holds the version of the DecisionNode SDK specification this package implements, `"1.2"`.
+`SPEC_VERSION` holds the version of the DecisionNode SDK specification this package implements, `"1.3"`.
 
 ## License
 

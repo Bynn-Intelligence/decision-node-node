@@ -13,8 +13,14 @@ import { createInterface } from 'node:readline';
 import { afterAll, beforeAll, describe, it } from 'vitest';
 
 import {
+  AgeReading,
+  AiGeneratedReading,
   Answer,
   Batch,
+  Booster,
+  Evidence,
+  UnknownReading,
+  type Reading,
   BoxAnswer,
   PointAnswer,
   box,
@@ -57,7 +63,10 @@ const SUITE = resolve(SUITE_DIR);
 const PYTHON = process.env.PYTHON ?? 'python3';
 const KINDS = ['requests', 'responses', 'errors', 'behaviour', 'constants'] as const;
 const ENV_VARS = ['DECISIONNODE_API_KEY', 'DECISIONNODE_BASE_URL', 'DECISIONNODE_MODEL'];
-const EXACT = new Set(['probabilities', 'legend', 'raw', 'entries', 'safety', 'body', 'limits']);
+const EXACT = new Set(['probabilities', 'legend', 'raw', 'entries', 'safety', 'body', 'limits', 'evidence', 'boosters']);
+// Compared whole and in their key order too: evidence in the request's order, an
+// error's boosters in the header's.
+const ORDERED = new Set(['evidence', 'boosters']);
 
 type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -105,6 +114,9 @@ function match(expected: Json, actual: Json, path: string): void {
       if (!(k in actual)) throw new Error(`${path}.${k}: missing (expected ${short(v)})`);
       if (EXACT.has(k)) {
         if (!same(v, actual[k])) throw new Error(`${path}.${k}: expected ${short(v)}, got ${short(actual[k])}`);
+        if (ORDERED.has(k) && v && typeof v === 'object' && !same(Object.keys(v), Object.keys(actual[k]))) {
+          throw new Error(`${path}.${k}: expected the order ${short(Object.keys(v))}, got ${short(Object.keys(actual[k]))}`);
+        }
       } else {
         match(v, actual[k], `${path}.${k}`);
       }
@@ -187,6 +199,39 @@ function normAnswer(a: Answer): Json {
   throw new Error(`an answer of class ${a.constructor.name}`);
 }
 
+function normReading(r: Reading): Json {
+  if (r instanceof AgeReading) {
+    return { kind: 'age', image: r.image, faces: r.faces, age_years: r.ageYears, low: r.low, high: r.high, confidence: r.confidence };
+  }
+  if (r instanceof AiGeneratedReading) {
+    return {
+      kind: 'ai_generated',
+      image: r.image,
+      generated: r.generated,
+      confidence: r.confidence,
+      method: r.method,
+      top_generator: { name: r.topGenerator.name, probability: r.topGenerator.probability },
+      c2pa_signer: r.c2paSigner,
+    };
+  }
+  if (r instanceof UnknownReading) return { kind: 'unknown', raw: r.raw };
+  throw new Error(`a reading of class ${(r as object).constructor.name}`);
+}
+
+function normEvidence(evidence: Record<string, Evidence | undefined> | null): Json {
+  if (evidence === null) return null;
+  return Object.fromEntries(
+    Object.entries(evidence).map(([name, e]) => [
+      name,
+      { version: e!.version, status: e!.status, latency_ms: e!.latencyMs, results: e!.results.map(normReading) },
+    ]),
+  );
+}
+
+function normBoosters(boosters: Record<string, { status: string; latencyMs: number | null }>): Json {
+  return Object.fromEntries(Object.entries(boosters).map(([name, b]) => [name, { status: b.status, latency_ms: b.latencyMs }]));
+}
+
 function normAnswers(answers: Record<string, Answer>): Json {
   return Object.fromEntries(Object.entries(answers).map(([k, v]) => [k, normAnswer(v)]));
 }
@@ -201,7 +246,10 @@ function normDecision(d: Decision): Json {
       output_tokens: d.usage.outputTokens,
       video_frames: d.usage.videoFrames,
       video_seconds: d.usage.videoSeconds,
+      booster_tokens: d.usage.boosterTokens,
+      boosters: d.usage.boosters,
     },
+    evidence: normEvidence(d.evidence),
     warnings: d.warnings,
     safety: normSafety(d.safety),
     answers: normAnswers(d.answers),
@@ -221,6 +269,7 @@ function normError(e: DecisionNodeError): Json {
     safety: e instanceof RefusalError ? normSafety(e.safety) : null,
     entries: e instanceof ValidationError ? e.entries : null,
     retry_after: e instanceof RateLimitError || e instanceof OverloadedError ? e.retryAfter : null,
+    boosters: normBoosters(e.boosters),
   };
 }
 
@@ -322,6 +371,13 @@ function decode(value: Json, ctx: Json = {}): Json {
           return point(raw.instructions, raw.image, raw.units);
         case '$box':
           return box(raw.instructions, raw.image, raw.units);
+        case '$booster': {
+          // Booster(name, images, require, options): each setting passed only when present.
+          const a = decode(raw, ctx);
+          const options: Json = {};
+          for (const k of ['images', 'require', 'options']) if (k in a) options[k] = a[k];
+          return new Booster(a.name, options);
+        }
         case '$video': {
           const a = decode(raw, ctx);
           const options: Json = {};
@@ -367,6 +423,7 @@ function decideParams(args: Json, ctx: Json): Json {
   if ('images' in args) p.images = decode(args.images, ctx);
   if ('videos' in args) p.videos = decode(args.videos, ctx);
   if ('model' in args) p.model = args.model;
+  if ('boosters' in args) p.boosters = decode(args.boosters, ctx);
   return p;
 }
 
@@ -413,6 +470,7 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
     if ('images' in args) p.images = decode(args.images, ctx);
     if ('videos' in args) p.videos = decode(args.videos, ctx);
     if ('model' in args) p.model = args.model;
+    if ('boosters' in args) p.boosters = decode(args.boosters, ctx);
     return p;
   };
   switch (method) {
@@ -755,7 +813,15 @@ async function runResponse(c: Json): Promise<void> {
   if ('decision' in exp) match(exp.decision, normDecision(result), 'decision');
   else if ('answer' in exp) match(exp.answer, normAnswer(result), 'answer');
   else if ('models' in exp) {
-    const got = (result as ModelInfo[]).map((m) => ({ name: m.name, description: m.description, release_date: m.releaseDate, limits: m.limits }));
+    const wanted: Json[] = Array.isArray(exp.models) ? exp.models : [];
+    const got = (result as ModelInfo[]).map((m, i) => {
+      const entry: Json = { name: m.name, description: m.description, release_date: m.releaseDate, limits: m.limits };
+      // The fine-tuned fields are compared where the case lists them.
+      const tuned: Json = { fine_tuned: m.fineTuned, base: m.base, adapter_version: m.adapterVersion, status: m.status };
+      const listed: Json = wanted[i] && typeof wanted[i] === 'object' ? wanted[i] : {};
+      for (const [k, v] of Object.entries(tuned)) if (k in listed) entry[k] = v;
+      return entry;
+    });
     if (!same(exp.models, got)) throw new Error(`models: expected ${short(exp.models)}, got ${short(got)}`);
   } else if ('raw' in exp) {
     if (!same(exp.raw, result)) throw new Error(`raw: expected ${short(exp.raw)}, got ${short(result)}`);

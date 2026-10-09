@@ -176,6 +176,6 @@ describe('videos in requests', () => {
   });
 
   it('implements specification 1.2', () => {
-    expect(SPEC_VERSION).toBe('1.2');
+    expect(SPEC_VERSION).toBe('1.3');
   });
 });

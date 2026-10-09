@@ -10,6 +10,7 @@ import {
   type DecisionResult,
 } from './answers.js';
 import { Batches, CHECK_REQUESTS, type BatchRequest, type BatchRun, type RunBatchOptions } from './batches.js';
+import type { BoosterInput } from './boosters.js';
 import { checkRequest, checkSessionOpen, type HeldLimits } from './checks.js';
 import { BadRequestError, DecisionNodeError, ServerError, localError } from './errors.js';
 import { Image } from './image.js';
@@ -146,8 +147,18 @@ export interface DecideParams<Q extends Questions = Questions> {
   images?: readonly ImageInput[] | null;
   /** Up to 4 videos, as the frames you sampled, seen by every question. */
   videos?: readonly VideoInput[] | null;
-  /** Overrides the client's model for this call. An empty string counts as not given. */
+  /**
+   * Overrides the client's model for this call: a catalogue id, or one of your
+   * workspace's fine-tuned models (`decisionnode-1.0-flash@acme/fraud`, pinned
+   * `...:3`), sent as given. An empty string counts as not given.
+   */
   model?: string | null;
+  /**
+   * Boosters that read the request's images before the decision: names
+   * (`'age'`), `Booster`s, or wire-form objects, in order. Their readings come
+   * back in `evidence`. None, or an empty list, sends no `boosters` field.
+   */
+  boosters?: readonly BoosterInput[] | null;
 }
 
 export interface CheckParams {
@@ -160,6 +171,7 @@ export interface CheckParams {
   images?: readonly ImageInput[] | null;
   videos?: readonly VideoInput[] | null;
   model?: string | null;
+  boosters?: readonly BoosterInput[] | null;
 }
 
 type ChoiceOptions = readonly string[] | { readonly [name: string]: unknown };
@@ -173,6 +185,7 @@ export interface ClassifyParams<C extends ChoiceOptions = ChoiceOptions> {
   images?: readonly ImageInput[] | null;
   videos?: readonly VideoInput[] | null;
   model?: string | null;
+  boosters?: readonly BoosterInput[] | null;
 }
 
 export interface ScoreParams {
@@ -183,6 +196,7 @@ export interface ScoreParams {
   images?: readonly ImageInput[] | null;
   videos?: readonly VideoInput[] | null;
   model?: string | null;
+  boosters?: readonly BoosterInput[] | null;
 }
 
 export interface NumberParams {
@@ -198,6 +212,7 @@ export interface NumberParams {
   images?: readonly ImageInput[] | null;
   videos?: readonly VideoInput[] | null;
   model?: string | null;
+  boosters?: readonly BoosterInput[] | null;
 }
 
 export interface GateParams {
@@ -208,6 +223,7 @@ export interface GateParams {
   images?: readonly ImageInput[] | null;
   videos?: readonly VideoInput[] | null;
   model?: string | null;
+  boosters?: readonly BoosterInput[] | null;
 }
 
 export type GateAnswers = {
@@ -360,7 +376,7 @@ export class DecisionNode {
       state: params.state === undefined || params.state === null ? '' : params.state,
       questions,
     };
-    return prepare(this.#placer, fields, params.images, this.#limits(fields.model), params.videos);
+    return prepare(this.#placer, fields, params.images, this.#limits(fields.model), params.videos, params.boosters);
   }
 
   /**
@@ -480,6 +496,7 @@ export class DecisionNode {
         images: params.images,
         videos: params.videos,
         model: params.model,
+        boosters: params.boosters,
       },
       options.signal,
     );
@@ -500,6 +517,7 @@ export class DecisionNode {
         images: params.images,
         videos: params.videos,
         model: params.model,
+        boosters: params.boosters,
       },
       options.signal,
     );
@@ -517,6 +535,7 @@ export class DecisionNode {
         images: params.images,
         videos: params.videos,
         model: params.model,
+        boosters: params.boosters,
       },
       options.signal,
     );
@@ -533,6 +552,7 @@ export class DecisionNode {
         images: params.images,
         videos: params.videos,
         model: params.model,
+        boosters: params.boosters,
       },
       options.signal,
     );
@@ -546,7 +566,14 @@ export class DecisionNode {
     const state: Record<string, unknown> = { action: params.action };
     if (params.context !== undefined && params.context !== null) state.context = params.context;
     const d = await this.decide(
-      { state, questions: gateQuestions(), images: params.images, videos: params.videos, model: params.model },
+      {
+        state,
+        questions: gateQuestions(),
+        images: params.images,
+        videos: params.videos,
+        model: params.model,
+        boosters: params.boosters,
+      },
       options,
     );
     return d as unknown as Decision<GateAnswers>;

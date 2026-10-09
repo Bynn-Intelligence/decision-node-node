@@ -74,6 +74,22 @@ export {
 } from './image.js';
 export { MAX_CHOICE_OPTIONS, MAX_GRID_VALUES, MAX_SCORE_LEVELS } from './checks.js';
 export {
+  AgeReading,
+  AiGeneratedReading,
+  Booster,
+  Evidence,
+  UnknownReading,
+  parseBoostersHeader,
+  type BoosterInput,
+  type BoosterName,
+  type BoosterOptions,
+  type BoosterStatus,
+  type EvidenceByBooster,
+  type Reading,
+  type TopGenerator,
+  type WireBooster,
+} from './boosters.js';
+export {
   MAX_VIDEOS,
   MAX_VIDEO_FPS,
   Video,

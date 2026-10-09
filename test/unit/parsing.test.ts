@@ -117,7 +117,14 @@ describe('answers', () => {
     );
     expect(d.requestId).toBe('req_9');
     expect(d.latencyMs).toBe(12.5);
-    expect(d.usage).toEqual({ inputTokens: 3, outputTokens: 0, videoFrames: null, videoSeconds: null });
+    expect(d.usage).toEqual({
+      inputTokens: 3,
+      outputTokens: 0,
+      videoFrames: null,
+      videoSeconds: null,
+      boosterTokens: null,
+      boosters: null,
+    });
     expect(d.warnings).toEqual([]);
     expect(d.safety).toEqual({ checked: true, harm: 0.2, selfHarm: 0.1, flagged: [] });
   });
@@ -128,12 +135,16 @@ describe('answers', () => {
       outputTokens: null,
       videoFrames: null,
       videoSeconds: null,
+      boosterTokens: null,
+      boosters: null,
     });
     expect(new Decision({ model: 'm', answers: {}, usage: { input_tokens: 9 } }, {}).usage).toEqual({
       inputTokens: 9,
       outputTokens: null,
       videoFrames: null,
       videoSeconds: null,
+      boosterTokens: null,
+      boosters: null,
     });
     expect(new Decision({ model: 'm', answers: {} }, {}).latencyMs).toBeNull();
   });
