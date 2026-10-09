@@ -159,6 +159,14 @@ describe('image ids of at most 64 characters', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('does not check a session frame image id, which is sent without it', async () => {
+    const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
+    const { dn, calls } = client([{ status: 200, body: { session_id: 'ses_1', questions: ['q'] } }]);
+    const session = await dn.openSession({ questions: Q });
+    await expect(session.checkFrame({ image: Image.fromBytes('f'.repeat(65), png) })).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1); // the open only
+  });
+
   it('reports a long id that is also a duplicate as too long', async () => {
     const long = 'x'.repeat(65);
     const { dn, calls } = client([OK_TRUTH]);

@@ -415,7 +415,7 @@ export class Session {
   async checkFrame(frame: Frame = {}): Promise<void> {
     this.#checkFrame(frame);
     const image = frame.image;
-    if (image instanceof Image) await this.#ctx.placer.check([image], this.#ctx.limits(this.model));
+    if (image instanceof Image) await this.#ctx.placer.check([image], this.#ctx.limits(this.model), false);
   }
 
   /**
@@ -468,7 +468,7 @@ export class Session {
 
   async #frameImage(image: NonNullable<Frame['image']>): Promise<unknown> {
     if (!(image instanceof Image)) return image;
-    const plan = await this.#ctx.placer.check([image], this.#ctx.limits(this.model));
+    const plan = await this.#ctx.placer.check([image], this.#ctx.limits(this.model), false);
     if (image.uploadId !== undefined) return { upload_id: image.uploadId };
     const { wires } = await this.#ctx.placer.place(plan!, undefined);
     const { id: _id, ...wire } = wires[0] as WireImage & { id: string };

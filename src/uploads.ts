@@ -75,9 +75,15 @@ export class ImagePlacer {
    * The local checks of a request's images, before anything is sent: ids present, at most 64 characters and unique, URLs by the rules that need no network, an
    * upload reference's media type, local bytes of a known format within the
    * size and pixel limits. `limits` are the model's published limits when the
-   * client holds them.
+   * client holds them. `idLength` is the 64-character id rule, for a body that
+   * carries the ids; a session frame's image is sent without its id, so a frame
+   * skips it.
    */
-  async check(images: readonly ImageInput[] | null | undefined, limits: Record<string, unknown> = {}): Promise<ImagePlan | null> {
+  async check(
+    images: readonly ImageInput[] | null | undefined,
+    limits: Record<string, unknown> = {},
+    idLength = true,
+  ): Promise<ImagePlan | null> {
     if (images === undefined || images === null) return null;
     if (!Array.isArray(images)) throw new TypeError('images must be an array');
     if (images.length === 0) return null;
@@ -90,7 +96,7 @@ export class ImagePlacer {
       const id = (img as { id?: unknown }).id;
       if (typeof id !== 'string' || id === '') throw localError(BadRequestError, `Image ${i} needs an id.`);
       // Counted in code points, as the API counts them, not UTF-16 units.
-      if ([...id].length > MAX_IMAGE_ID_CHARS) {
+      if (idLength && [...id].length > MAX_IMAGE_ID_CHARS) {
         throw localError(BadRequestError, `Image ${i}: its id is longer than ${MAX_IMAGE_ID_CHARS} characters.`);
       }
       if (ids.has(id)) throw localError(BadRequestError, `Duplicate image id: ${id}`);
