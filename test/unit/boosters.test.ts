@@ -243,8 +243,17 @@ describe('evidence', () => {
                 generated: 1,
                 confidence: 1,
                 method: 'c2pa',
-                top_generator: { name: 'generator-b', probability: 0.64 },
+                top_generator: null,
                 c2pa_signer: 'Example Camera Co.',
+              },
+              {
+                image: 'b',
+                generated: 0.12,
+                confidence: 0.76,
+                method: 'inference',
+                top_generator: null,
+                c2pa_signer: null,
+                c2pa: 'untrusted',
               },
             ],
           },
@@ -255,7 +264,10 @@ describe('evidence', () => {
       {},
     );
     const gen = d.evidence!.ai_generated!.results[0] as AiGeneratedReading;
-    expect([gen.method, gen.c2paSigner, gen.topGenerator]).toEqual(['c2pa', 'Example Camera Co.', { name: 'generator-b', probability: 0.64 }]);
+    expect([gen.method, gen.c2paSigner, gen.topGenerator, gen.c2pa]).toEqual(['c2pa', 'Example Camera Co.', null, null]);
+    const untrusted = d.evidence!.ai_generated!.results[1] as AiGeneratedReading;
+    expect(untrusted).toBeInstanceOf(AiGeneratedReading);
+    expect([untrusted.c2pa, untrusted.c2paSigner, untrusted.topGenerator]).toEqual(['untrusted', null, null]);
     expect([d.evidence!.age!.status, d.evidence!.age!.results]).toEqual(['timeout', []]);
     expect([d.evidence!.faces!.status, d.evidence!.faces!.results]).toEqual(['skipped', []]);
   });
@@ -290,6 +302,8 @@ describe('evidence', () => {
               // No top_generator, and no c2pa_signer key: each is required.
               { image: 'd', generated: 0.5, confidence: 0.5, method: 'inference', c2pa_signer: null },
               { image: 'e', generated: 0.5, confidence: 0.5, method: 'inference', top_generator: { name: 'g', probability: 0.5 } },
+              // A c2pa that is not a string.
+              { image: 'f', generated: 0.5, confidence: 0.5, method: 'inference', top_generator: null, c2pa_signer: null, c2pa: 5 },
             ],
           },
         },

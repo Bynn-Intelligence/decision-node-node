@@ -165,10 +165,19 @@ export class AiGeneratedReading {
   readonly confidence: number;
   /** `inference` (read from the pixels), `c2pa` (the file's Content Credentials say so), or a newer value as sent. */
   readonly method: 'inference' | 'c2pa' | (string & {});
-  /** The likeliest generator. */
-  readonly topGenerator: TopGenerator;
-  /** Who signed the file's Content Credentials, or `null` when it has none. */
+  /**
+   * The likeliest generator, when the reading says the picture is likely
+   * generated; `null` otherwise, and always on a `c2pa` reading.
+   */
+  readonly topGenerator: TopGenerator | null;
+  /** Who signed the file's Content Credentials when they are trusted; `null` otherwise. */
   readonly c2paSigner: string | null;
+  /**
+   * `untrusted` when the file carries Content Credentials that validate but
+   * are not trusted (they name no signer and change nothing in the reading),
+   * or a newer value as sent; `null` when the reading has none.
+   */
+  readonly c2pa: 'untrusted' | (string & {}) | null;
   /** The reading as received. */
   readonly raw: Record<string, unknown>;
 
@@ -178,19 +187,23 @@ export class AiGeneratedReading {
     this.generated = raw.generated as number;
     this.confidence = raw.confidence as number;
     this.method = raw.method as string;
-    const top = raw.top_generator as Record<string, unknown>;
-    this.topGenerator = { name: top.name as string, probability: top.probability as number };
+    const top = raw.top_generator as Record<string, unknown> | null;
+    this.topGenerator = top === null ? null : { name: top.name as string, probability: top.probability as number };
     this.c2paSigner = raw.c2pa_signer as string | null;
+    this.c2pa = (raw.c2pa ?? null) as string | null;
   }
 
   static wellFormed(r: Record<string, unknown>): boolean {
     if (typeof r.image !== 'string' || typeof r.method !== 'string') return false;
     if (!isNumber(r.generated) || !isNumber(r.confidence)) return false;
+    // top_generator and c2pa_signer are always sent, null when unset; c2pa only
+    // when the file's Content Credentials are not trusted.
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(r, k);
+    if (!has('top_generator') || !has('c2pa_signer')) return false;
     const top = r.top_generator;
-    if (!(isObject(top) && typeof top.name === 'string' && isNumber(top.probability))) return false;
-    // c2pa_signer is always sent: null when the file carries no Content Credentials.
-    if (!Object.prototype.hasOwnProperty.call(r, 'c2pa_signer')) return false;
-    return r.c2pa_signer === null || typeof r.c2pa_signer === 'string';
+    if (top !== null && !(isObject(top) && typeof top.name === 'string' && isNumber(top.probability))) return false;
+    if (r.c2pa_signer !== null && typeof r.c2pa_signer !== 'string') return false;
+    return absent(r.c2pa) || typeof r.c2pa === 'string';
   }
 }
 

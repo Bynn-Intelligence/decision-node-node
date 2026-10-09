@@ -260,7 +260,7 @@ Boosters read images in every form (URL, inline or uploaded), and every question
 | Reading | Fields |
 |---|---|
 | `AgeReading` | `image`, `faces` (how many faces were found; the largest is read), and `ageYears`, `low`, `high` (the range) and `confidence`, each `null` when `faces` is 0 |
-| `AiGeneratedReading` | `image`, `generated` (the probability that a generator made the picture), `confidence`, `method` (`inference`: read from the pixels; `c2pa`: the file's Content Credentials say so), `topGenerator` (`name` and `probability` of the likeliest generator), `c2paSigner` (who signed the Content Credentials, or `null`) |
+| `AiGeneratedReading` | `image`, `generated` (the probability that a generator made the picture), `confidence`, `method` (`inference`: read from the pixels; `c2pa`: the file's trusted Content Credentials declare it generated or edited by AI), `topGenerator` (`name` and `probability` of the likeliest generator when the reading says likely generated; `null` otherwise, and always on a `c2pa` reading), `c2paSigner` (who signed the file's Content Credentials when they are trusted, else `null`), `c2pa` (`untrusted` when the file carries Content Credentials that validate but are not trusted, which change nothing in the reading; else `null`) |
 | `UnknownReading` | `image` and `raw`: a reading of a booster this version does not know, or one with a field missing or of the wrong type. The decision does not fail |
 
 Each reading also has `raw`. Numbers are passed through as received. `usage.boosterTokens` (the readings' share of `inputTokens`) and `usage.boosters` (the booster calls billed) are `null` for a request without boosters.

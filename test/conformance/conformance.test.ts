@@ -210,8 +210,9 @@ function normReading(r: Reading): Json {
       generated: r.generated,
       confidence: r.confidence,
       method: r.method,
-      top_generator: { name: r.topGenerator.name, probability: r.topGenerator.probability },
+      top_generator: r.topGenerator === null ? null : { name: r.topGenerator.name, probability: r.topGenerator.probability },
       c2pa_signer: r.c2paSigner,
+      c2pa: r.c2pa,
     };
   }
   if (r instanceof UnknownReading) return { kind: 'unknown', raw: r.raw };
