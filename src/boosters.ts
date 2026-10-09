@@ -252,11 +252,7 @@ export class Evidence<R extends Reading = Reading> {
   readonly status: 'ok' | 'timeout' | 'error' | 'skipped' | (string & {}) | null;
   /** How long the booster took, in milliseconds. */
   readonly latencyMs: number | null;
-  /**
-   * The calls of this booster billed on this request (a picture it read for
-   * the workspace in the last hour is not billed again); `null` when the
-   * server did not send it.
-   */
+  /** The calls of this booster billed on this request; `null` when the server did not send it. */
   readonly billedCalls: number | null;
   /** One reading per image read; empty unless `status` is `ok`. */
   readonly results: R[];

@@ -268,7 +268,7 @@ Boosters read images in every form (URL, inline or uploaded), and every question
 | `version` | The version of the booster that read, such as `age-v3` |
 | `status` | `ok`; `timeout` (no answer in time); `error`; `skipped` (none of the request's images is one it reads) |
 | `latencyMs` | How long the booster took |
-| `billedCalls` | The calls of this booster billed on this request; a picture it read for your workspace in the last hour is not billed again |
+| `billedCalls` | The calls of this booster billed on this request |
 | `results` | One reading per image read, empty unless `status` is `ok` |
 | `raw` | The entry as the API sent it |
 
@@ -280,7 +280,7 @@ Boosters read images in every form (URL, inline or uploaded), and every question
 
 Each reading also has `raw`. Numbers are passed through as received. `usage.boosterTokens` (the readings' share of `inputTokens`) and `usage.boosters` (the booster calls billed) are `null` for a request without boosters.
 
-Booster calls are drawn from your prepaid balance with the request's tokens: one call per booster and image read with status `ok`. A booster that timed out or failed is free, a picture the same booster version read for your workspace in the last hour is not billed again, and a refused request pays for none of its boosters. The readings' tokens are input tokens at the model's price. The price per call is on the [pricing page](https://decisionnode.com/docs/pricing#boosters).
+Booster calls are drawn from your prepaid balance with the request's tokens: one call per booster and image read with status `ok`. A booster that timed out or failed is free, and a refused request pays for none of its boosters. The readings' tokens are input tokens at the model's price. The price per call is on the [pricing page](https://decisionnode.com/docs/pricing#boosters).
 
 | Status, `errorType` | Error | When |
 |---|---|---|
