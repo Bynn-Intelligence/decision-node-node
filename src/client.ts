@@ -159,6 +159,12 @@ export interface DecideParams<Q extends Questions = Questions> {
    * back in `evidence`. None, or an empty list, sends no `boosters` field.
    */
   boosters?: readonly BoosterInput[] | null;
+  /**
+   * `false`: a `decisionnode-1.0` request that no ready worker can take at
+   * once gets the 529 `OverloadedError` (retried) instead of an answer from
+   * `decisionnode-1.0-flash`. Left out, the API's default (`true`) applies.
+   */
+  fallback?: boolean | null;
 }
 
 export interface CheckParams {
@@ -172,6 +178,7 @@ export interface CheckParams {
   videos?: readonly VideoInput[] | null;
   model?: string | null;
   boosters?: readonly BoosterInput[] | null;
+  fallback?: boolean | null;
 }
 
 type ChoiceOptions = readonly string[] | { readonly [name: string]: unknown };
@@ -186,6 +193,7 @@ export interface ClassifyParams<C extends ChoiceOptions = ChoiceOptions> {
   videos?: readonly VideoInput[] | null;
   model?: string | null;
   boosters?: readonly BoosterInput[] | null;
+  fallback?: boolean | null;
 }
 
 export interface ScoreParams {
@@ -197,6 +205,7 @@ export interface ScoreParams {
   videos?: readonly VideoInput[] | null;
   model?: string | null;
   boosters?: readonly BoosterInput[] | null;
+  fallback?: boolean | null;
 }
 
 export interface NumberParams {
@@ -213,6 +222,7 @@ export interface NumberParams {
   videos?: readonly VideoInput[] | null;
   model?: string | null;
   boosters?: readonly BoosterInput[] | null;
+  fallback?: boolean | null;
 }
 
 export interface GateParams {
@@ -224,6 +234,7 @@ export interface GateParams {
   videos?: readonly VideoInput[] | null;
   model?: string | null;
   boosters?: readonly BoosterInput[] | null;
+  fallback?: boolean | null;
 }
 
 export type GateAnswers = {
@@ -376,7 +387,15 @@ export class DecisionNode {
       state: params.state === undefined || params.state === null ? '' : params.state,
       questions,
     };
-    return prepare(this.#placer, fields, params.images, this.#limits(fields.model), params.videos, params.boosters);
+    return prepare(
+      this.#placer,
+      fields,
+      params.images,
+      this.#limits(fields.model),
+      params.videos,
+      params.boosters,
+      params.fallback,
+    );
   }
 
   /**
@@ -497,6 +516,7 @@ export class DecisionNode {
         videos: params.videos,
         model: params.model,
         boosters: params.boosters,
+        fallback: params.fallback,
       },
       options.signal,
     );
@@ -518,6 +538,7 @@ export class DecisionNode {
         videos: params.videos,
         model: params.model,
         boosters: params.boosters,
+        fallback: params.fallback,
       },
       options.signal,
     );
@@ -536,6 +557,7 @@ export class DecisionNode {
         videos: params.videos,
         model: params.model,
         boosters: params.boosters,
+        fallback: params.fallback,
       },
       options.signal,
     );
@@ -553,6 +575,7 @@ export class DecisionNode {
         videos: params.videos,
         model: params.model,
         boosters: params.boosters,
+        fallback: params.fallback,
       },
       options.signal,
     );
@@ -573,6 +596,7 @@ export class DecisionNode {
         videos: params.videos,
         model: params.model,
         boosters: params.boosters,
+        fallback: params.fallback,
       },
       options,
     );

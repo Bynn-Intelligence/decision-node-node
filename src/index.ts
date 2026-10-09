@@ -56,6 +56,7 @@ export {
   type AnswerFor,
   type AnswersFor,
   type DecisionResult,
+  type Fallback,
   type ModelSessions,
   type Usage,
 } from './answers.js';

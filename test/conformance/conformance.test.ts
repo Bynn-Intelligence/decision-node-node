@@ -63,7 +63,7 @@ const SUITE = resolve(SUITE_DIR);
 const PYTHON = process.env.PYTHON ?? 'python3';
 const KINDS = ['requests', 'responses', 'errors', 'behaviour', 'constants'] as const;
 const ENV_VARS = ['DECISIONNODE_API_KEY', 'DECISIONNODE_BASE_URL', 'DECISIONNODE_MODEL'];
-const EXACT = new Set(['probabilities', 'legend', 'raw', 'entries', 'safety', 'body', 'limits', 'evidence', 'boosters']);
+const EXACT = new Set(['probabilities', 'legend', 'raw', 'entries', 'safety', 'body', 'limits', 'evidence', 'boosters', 'fallback']);
 // Compared whole and in their key order too: evidence in the request's order, an
 // error's boosters in the header's.
 const ORDERED = new Set(['evidence', 'boosters']);
@@ -251,6 +251,7 @@ function normDecision(d: Decision): Json {
       boosters: d.usage.boosters,
     },
     evidence: normEvidence(d.evidence),
+    fallback: d.fallback === null ? null : { served_model: d.fallback.servedModel, requested_model: d.fallback.requestedModel },
     warnings: d.warnings,
     safety: normSafety(d.safety),
     answers: normAnswers(d.answers),
@@ -425,6 +426,7 @@ function decideParams(args: Json, ctx: Json): Json {
   if ('videos' in args) p.videos = decode(args.videos, ctx);
   if ('model' in args) p.model = args.model;
   if ('boosters' in args) p.boosters = decode(args.boosters, ctx);
+  if ('fallback' in args) p.fallback = decode(args.fallback, ctx);
   return p;
 }
 
@@ -472,6 +474,7 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
     if ('videos' in args) p.videos = decode(args.videos, ctx);
     if ('model' in args) p.model = args.model;
     if ('boosters' in args) p.boosters = decode(args.boosters, ctx);
+    if ('fallback' in args) p.fallback = decode(args.fallback, ctx);
     return p;
   };
   switch (method) {

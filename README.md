@@ -342,7 +342,7 @@ The base URL must use `https`; `http` is accepted only for `localhost`, `127.0.0
 
 An answer of a type this version does not know yet is an `UnknownAnswer` with every field in `raw`, and so is an answer of a known type with a field missing or of the wrong type: the decision does not fail. `check`, `classify`, `score` and `number` promise a typed answer instead, so when their own answer is missing or malformed they throw a `ServerError` with the status, `requestId` and the server's `reason` from `x-decisionnode-error`. Every method takes a last argument `{ signal }` to cancel the call with an `AbortSignal`.
 
-A `Decision` has `answers`, `model` (the version that answered; for a fine-tuned model its pinned name), `usage.inputTokens`, `usage.outputTokens`, for a request with videos `usage.videoFrames` and `usage.videoSeconds` (`null` otherwise), for a request with boosters `evidence`, `usage.boosterTokens` and `usage.boosters` (`null` otherwise), `warnings` (what the API changed when it read the videos, an empty array when nothing), `requestId`, `latencyMs` (the server's time), `safety` and `raw` (the parsed body). A token count or latency the response did not carry is `null`, never 0. `decision.get('route')` reads one answer by id.
+A `Decision` has `answers`, `model` (the version that answered; for a fine-tuned model its pinned name), `usage.inputTokens`, `usage.outputTokens`, for a request with videos `usage.videoFrames` and `usage.videoSeconds` (`null` otherwise), for a request with boosters `evidence`, `usage.boosterTokens` and `usage.boosters` (`null` otherwise), `fallback` (on a fallback answer the model that answered and the one asked for, `null` otherwise; see Fallback below), `warnings` (what the API changed when it read the videos, an empty array when nothing), `requestId`, `latencyMs` (the server's time), `safety` and `raw` (the parsed body). A token count or latency the response did not carry is `null`, never 0. `decision.get('route')` reads one answer by id.
 
 ### Checked before sending
 
@@ -614,6 +614,20 @@ models.map((m) => [m.name, m.limits]);
 | `decisionnode-1.0`, `decisionnode-1.0-flash` | Pinned versions |
 
 Limits differ by model version; `models()` returns each model's published limits in `limits`, wire names as sent. The number, upload, session and batch limits are also typed fields: `numberOneQuestionValues`, `numberMaxGridValues`, `numberDefaultRange`, `numberDefaultStep`, `uploadMaxBytes`, `uploadTtlSeconds`, `uploadMediaTypes`, `sessions` and `batch`, each `null` when a model does not publish it.
+
+### Fallback
+
+A request for `decisionnode-1.0` that no ready worker can take at once is answered by `decisionnode-1.0-flash`, billed at Flash's price. `decision.model` is the model that answered, and `decision.fallback` names both models; it is `null` on an ordinary answer:
+
+```ts
+const d = await dn.decide({ model: 'decisionnode-1.0', state, questions });
+if (d.fallback !== null) {
+  d.fallback.servedModel;    // 'decisionnode-1.0-flash'
+  d.fallback.requestedModel; // 'decisionnode-1.0'
+}
+```
+
+With `fallback: false` such a request gets the 529 `OverloadedError` instead, retried like every 529. `decide`, the helpers, `decideMany` requests and batch requests take `fallback`; it is sent only when given, and left out the API's default (`true`) applies. Sessions, batch lines and fine-tuned models never fall back.
 
 ### Fine-tuned models
 

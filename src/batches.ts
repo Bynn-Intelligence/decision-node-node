@@ -44,6 +44,8 @@ export interface BatchRequest<Q extends Questions = Questions> {
   model?: string | null;
   /** Boosters, as on `decide`: the line carries them as the live call does. */
   boosters?: readonly BoosterInput[] | null;
+  /** Sent as given when set; a batch line never falls back (it waits in the queue). */
+  fallback?: boolean | null;
 }
 
 export type BatchState = 'draft' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired';
@@ -533,7 +535,15 @@ export class Batches {
         questions: req.questions,
       };
       lines.push({
-        prepared: await prepare(this.#ctx.placer, fields, req.images, this.#ctx.limits(model), req.videos, req.boosters),
+        prepared: await prepare(
+          this.#ctx.placer,
+          fields,
+          req.images,
+          this.#ctx.limits(model),
+          req.videos,
+          req.boosters,
+          req.fallback,
+        ),
       });
     }
     return lines;

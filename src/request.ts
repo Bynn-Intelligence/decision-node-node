@@ -37,7 +37,8 @@ export function checkQuestionMap(questions: unknown): Record<string, unknown> {
  * Checks and serialises one request. `fields` are the body's fields in order,
  * `questions` among them; `images` are checked after the questions, then the
  * `videos`, which are sent after the other fields (frames always inline), then
- * `boosters`, sent as given (none, or an empty list, leaves the key out).
+ * `boosters`, sent as given (none, or an empty list, leaves the key out), then
+ * `fallback`, sent only when given.
  */
 export async function prepare(
   placer: ImagePlacer,
@@ -46,13 +47,18 @@ export async function prepare(
   limits: HeldLimits = {},
   videos?: readonly VideoInput[] | null,
   boosters?: unknown,
+  fallback?: unknown,
 ): Promise<Prepared> {
   checkQuestionMap(fields.questions);
+  if (fallback !== undefined && fallback !== null && typeof fallback !== 'boolean') {
+    throw new TypeError(`fallback must be true or false, got ${typeof fallback}`);
+  }
   const wires = videoWires(videos);
   const tail: Record<string, unknown> = {};
   if (wires.length > 0) tail.videos = wires;
   const boosterWire = boostersWire(boosters);
   if (boosterWire !== undefined) tail.boosters = boosterWire;
+  if (typeof fallback === 'boolean') tail.fallback = fallback;
   // The images and videos count toward the nesting limit as the objects they will be, the boosters as sent.
   let probe = Array.isArray(images) && images.length > 0 ? { ...fields, images: images.map(() => ({ id: '' })) } : fields;
   if (wires.length > 0) probe = { ...probe, videos: wires.map(() => ({ id: '' })) };

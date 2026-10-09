@@ -286,6 +286,17 @@ function count(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * A fallback answer: `decisionnode-1.0` had no ready worker, so
+ * `decisionnode-1.0-flash` answered in its place.
+ */
+export interface Fallback {
+  /** The model that answered, from `x-decisionnode-fallback`; the same as `Decision.model`. */
+  servedModel: string;
+  /** The model the request asked for, from `x-decisionnode-requested-model`. */
+  requestedModel: string | null;
+}
+
 /** The result of `decide()`. */
 export class Decision<A extends Record<string, Answer> = Record<string, Answer>> {
   /** Answers by question id. */
@@ -311,6 +322,11 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
    * request's order; `null` when the request named none.
    */
   readonly evidence: EvidenceByBooster | null;
+  /**
+   * On a fallback answer, the model that answered and the one asked for; `null`
+   * on an ordinary answer. `model` stays the model that answered.
+   */
+  readonly fallback: Fallback | null;
 
   constructor(body: Record<string, unknown>, headers: Record<string, string>) {
     this.raw = body;
@@ -333,6 +349,9 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
     const n = latency === undefined || latency.trim() === '' ? NaN : Number(latency);
     this.latencyMs = Number.isFinite(n) ? n : null;
     this.safety = parseSafety(headers['x-decisionnode-safety']);
+    const served = headers['x-decisionnode-fallback'];
+    this.fallback =
+      served === undefined ? null : { servedModel: served, requestedModel: headers['x-decisionnode-requested-model'] ?? null };
   }
 
   /** The answer to one question, by id. */

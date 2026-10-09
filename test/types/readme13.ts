@@ -1,4 +1,4 @@
-// The README's boosters and fine-tuned model examples, compiled so they stay correct.
+// The README's boosters, fine-tuned model and fallback examples, compiled so they stay correct.
 import {
   AgeReading,
   AiGeneratedReading,
@@ -9,6 +9,7 @@ import {
   UnknownReading,
   truth,
   type BoosterStatus,
+  type Fallback,
   type ModelInfo,
 } from '../../src/index.js';
 
@@ -67,5 +68,15 @@ export async function readme13() {
   const pinned: string = tuned.model;
   const models: ModelInfo[] = await dn.models();
   const fineTuned = models.filter((m) => m.fineTuned === true).map((m) => [m.base, m.adapterVersion, m.status]);
+
+  // The fallback: on by default, named in decision.fallback; false asks for the 529 instead.
+  const main = await dn.decide({ model: 'decisionnode-1.0', questions: { q: truth('?') } });
+  const fellBack: Fallback | null = main.fallback;
+  if (fellBack !== null) {
+    const served: string = fellBack.servedModel;
+    const requested: string | null = fellBack.requestedModel;
+    void [served, requested];
+  }
+  await dn.decide({ model: 'decisionnode-1.0', questions: { q: truth('?') }, fallback: false });
   return [adult, tokens, calls, pinned, fineTuned];
 }
