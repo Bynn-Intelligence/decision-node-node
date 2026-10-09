@@ -161,7 +161,8 @@ export class BatchResult {
       this.error = null;
     } else if (typeof this.status === 'number') {
       this.decision = null;
-      this.error = errorFromResponse(this.status, headers, body === undefined ? '' : JSON.stringify(body));
+      // A line's body is JSON, so its error reads as the envelope (no body is `null`).
+      this.error = errorFromResponse(this.status, headers, JSON.stringify(body === undefined ? null : body));
     } else {
       this.decision = null;
       this.error = null;

@@ -110,7 +110,7 @@ A request body may be at most 25 MiB (26,214,400 bytes). Inline images count tow
 
 Set `inlineThreshold` on the client to move the cut-off: `0` uploads every local image, a large value sends everything inline. `dn.upload(images)` uploads 1 to 16 images whatever their size and returns their upload ids, for use later with `Image.fromUploadId`. No image is ever resized or re-encoded.
 
-Every image is checked before anything is sent: ids present and unique, URLs by the rules above that need no network, an upload id's media type one of the three, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. A request holds at most 16 images; a 17th throws `ValidationError` as the API answers it (a `too_long` entry on the images). An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
+Every image is checked before anything is sent: ids present, at most 64 characters (counted as Unicode code points) and unique, URLs by the rules above that need no network, an upload id's media type one of the three, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. A request holds at most 16 images; a 17th throws `ValidationError` as the API answers it (a `too_long` entry on the images). An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
 
 ### Referring to images and videos
 
@@ -357,6 +357,7 @@ The client checks every request against every fixed rule the API documents befor
 | A number grid: `min`, `max` or `step` not a finite number, beyond 2^53, `step` not above 0, more than 6 decimals in `min` or `step`, beyond the bound that keeps every value exact, `min` above `max`, more than 4,096 values | `ValidationError`, the API's entries |
 | More than 128 objects and arrays inside each other | `BadRequestError`, `api_usage_error` |
 | Images (see Images); an image URL that is not `https` | `BadRequestError`, `api_usage_error` |
+| An image id over 64 characters, counted as Unicode code points (`Image 1: its id is longer than 64 characters.`, images counted from 0) | `BadRequestError`, `api_usage_error` |
 | An `https` image URL over 2,048 characters, with user information, on a port other than 443, or naming a private, loopback, link-local or other reserved address literally | `BadRequestError`, `image_url_refused` |
 | A session's `window` outside 1 to 64 or `ttl_seconds` outside 1 to 3,600 | `ValidationError`, the API's entries |
 | A session frame (see Sessions) | `BadRequestError`, `api_usage_error` |
@@ -549,6 +550,8 @@ Every error is a `DecisionNodeError`, exported under that name, with `status`, `
 | other 5xx, a 2xx whose body is not JSON, or a helper's own answer missing or malformed | `ServerError` | |
 | no response | `ConnectionError`, `TimeoutError` | |
 | any other status: 3xx, 405, 409, 410, 408 after its retries | `DecisionNodeError` itself | |
+
+The service's edge or a proxy may answer with a page of its own instead of the API's JSON error (a 408 for an upload that stalls, a 413 for a body far over the limit, a 502). Such an error is classed by its status alone, as in the table (a 400 is a `BadRequestError`, never a `ContextLimitError`; a 403 a `PermissionDeniedError`, never a `RefusalError`; a 422 a `ValidationError` with no `entries`), with `errorType` `null`, `requestId` and `reason` from the headers when sent, and the client's own `message`: `HTTP <status> <text>`, then the request id when there is one, for example `HTTP 413 Content Too Large` or `HTTP 408 Request Timeout (request id req_...)`. The page itself is never read into the error. Retries are the same as for any body: a 408 is retried, a 413 never.
 
 Every error also has `boosters`: for a request that named boosters, each booster's status and time from the `x-decisionnode-boosters` header (see "Boosters"); an empty object otherwise.
 

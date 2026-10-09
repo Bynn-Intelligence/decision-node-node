@@ -237,7 +237,9 @@ describe('errorFromResponse', () => {
     const e = err(502, '<html>Bad gateway</html>');
     expect(e).toBeInstanceOf(ServerError);
     expect(e.errorType).toBeNull();
-    expect(e.body).toBe('<html>Bad gateway</html>');
+    // The page is never read: the message is the client's own description.
+    expect(e.message).toBe('HTTP 502 Bad Gateway');
+    expect(e.body).toBeUndefined();
   });
 
   it('prefers retry-after-ms over Retry-After', () => {

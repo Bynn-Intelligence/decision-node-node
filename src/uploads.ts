@@ -26,6 +26,8 @@ const CACHE_ENTRIES = 256;
 const CACHE_MARGIN_MS = 5 * 60 * 1000;
 
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+/** The longest image id the API takes, in code points. */
+const MAX_IMAGE_ID_CHARS = 64;
 
 /** Names an image that would be uploaded when a body is measured before sending: as long as an upload id. */
 const UPLOAD_ID_PLACEHOLDER = `upl_${'0'.repeat(32)}`;
@@ -70,7 +72,7 @@ export class ImagePlacer {
   }
 
   /**
-   * The local checks of a request's images, before anything is sent: ids present and unique, URLs by the rules that need no network, an
+   * The local checks of a request's images, before anything is sent: ids present, at most 64 characters and unique, URLs by the rules that need no network, an
    * upload reference's media type, local bytes of a known format within the
    * size and pixel limits. `limits` are the model's published limits when the
    * client holds them.
@@ -87,6 +89,10 @@ export class ImagePlacer {
       if (img === null || typeof img !== 'object') throw new TypeError('an image must be an Image or a wire-form object');
       const id = (img as { id?: unknown }).id;
       if (typeof id !== 'string' || id === '') throw localError(BadRequestError, `Image ${i} needs an id.`);
+      // Counted in code points, as the API counts them, not UTF-16 units.
+      if ([...id].length > MAX_IMAGE_ID_CHARS) {
+        throw localError(BadRequestError, `Image ${i}: its id is longer than ${MAX_IMAGE_ID_CHARS} characters.`);
+      }
       if (ids.has(id)) throw localError(BadRequestError, `Duplicate image id: ${id}`);
       ids.add(id);
       if (!(img instanceof Image)) {

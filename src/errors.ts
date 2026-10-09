@@ -16,8 +16,12 @@ export interface ErrorFields {
  * has no class of its own (a 3xx, 405, 409, or 408 once its retries are spent).
  *
  * `message` is the server's own message exactly as sent: `detail.message`, or
- * `detail` when it is a string, and empty when the response carried none. When
- * no response arrived, it describes what went wrong on the client side. The
+ * `detail` when it is a string, and empty when the response carried none. An
+ * error whose body is not JSON (a page from the service's edge or a proxy, or
+ * no body) is classed by its status alone and described as
+ * `HTTP <status> <text>`, with the request id after it when sent, for example
+ * `HTTP 413 Content Too Large`; its body is never read. When no response
+ * arrived, `message` describes what went wrong on the client side. The
  * server's explanation in words is in `reason`.
  */
 export class DecisionNodeError extends Error {
@@ -29,7 +33,7 @@ export class DecisionNodeError extends Error {
   readonly requestId: string | null;
   /** The server's explanation in words, from the `x-decisionnode-error` header, as received. */
   readonly reason: string | null;
-  /** The parsed error body, or the raw text when it was not JSON. */
+  /** The parsed error body; `undefined` when it was not JSON. */
   readonly body: unknown;
   /** The response headers, names lower-cased. */
   readonly headers: Record<string, string>;
@@ -193,18 +197,54 @@ export function retryAfterSeconds(headers: Record<string, string>): number | nul
   return null;
 }
 
-/** Builds the error for a response outside 200 to 299. */
+// The status text of an error whose body is not JSON: the same in every
+// DecisionNode SDK, never the HTTP library's own wording.
+const STATUS_TEXT: Record<number, string> = {
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  402: 'Payment Required',
+  403: 'Forbidden',
+  404: 'Not Found',
+  405: 'Method Not Allowed',
+  408: 'Request Timeout',
+  409: 'Conflict',
+  410: 'Gone',
+  413: 'Content Too Large',
+  422: 'Unprocessable Content',
+  429: 'Too Many Requests',
+  500: 'Internal Server Error',
+  502: 'Bad Gateway',
+  503: 'Service Unavailable',
+  504: 'Gateway Timeout',
+  529: 'Overloaded',
+};
+
+/** `HTTP <status> <text>`, then ` (request id <id>)` when there is one. */
+function statusMessage(status: number, requestId: string | null): string {
+  const text = STATUS_TEXT[status];
+  const head = text === undefined ? `HTTP ${status}` : `HTTP ${status} ${text}`;
+  return requestId === null ? head : `${head} (request id ${requestId})`;
+}
+
+/**
+ * Builds the error for a response outside 200 to 299. A body that is not JSON
+ * (the edge's or a proxy's page, or none) is never read: the error follows
+ * the status alone, and its message is the client's own description.
+ */
 export function errorFromResponse(status: number, headers: Record<string, string>, text: string): DecisionNodeError {
-  let body: unknown = text;
+  const requestId = headers['x-request-id'] ?? null;
+  let body: unknown;
+  let message: string;
   try {
     body = JSON.parse(text);
+    message = '';
   } catch {
-    // Not JSON (a proxy's HTML page, for example): keep the text.
+    body = undefined;
+    message = statusMessage(status, requestId);
   }
   const detail = body !== null && typeof body === 'object' && !Array.isArray(body) ? (body as { detail?: unknown }).detail : undefined;
 
   let errorType: string | null = null;
-  let message = '';
   let entries: unknown[] | null = null;
   let category: string | null = null;
   if (detail !== null && typeof detail === 'object' && !Array.isArray(detail)) {
@@ -218,7 +258,6 @@ export function errorFromResponse(status: number, headers: Record<string, string
     entries = detail;
   }
 
-  const requestId = headers['x-request-id'] ?? null;
   const reason = headers['x-decisionnode-error'] ?? null;
   const fields: ErrorFields = { status, errorType, requestId, reason, body, headers };
 
