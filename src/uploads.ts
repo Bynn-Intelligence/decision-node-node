@@ -27,6 +27,9 @@ const CACHE_MARGIN_MS = 5 * 60 * 1000;
 
 const MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
+/** Names an image that would be uploaded when a body is measured before sending: as long as an upload id. */
+const UPLOAD_ID_PLACEHOLDER = `upl_${'0'.repeat(32)}`;
+
 /** Errors of a request naming an upload that is no longer usable; the SDK uploads again once. */
 export const STALE_UPLOAD = new Set(['upload_expired', 'upload_consumed', 'upload_not_found', 'upload_incomplete']);
 
@@ -145,6 +148,29 @@ export class ImagePlacer {
       }
     }
     return { wires: wires as WireImage[], placed };
+  }
+
+  /**
+   * The wire forms `place` would give, with nothing uploaded: an image it
+   * would upload is named by a placeholder of an upload id's length, so the
+   * body's size is known before anything is sent or uploaded.
+   */
+  async project(plan: ImagePlan): Promise<WireImage[]> {
+    let total = 0;
+    for (const slot of plan.slots) if ('local' in slot) total += slot.local.bytes.length;
+    const upload = total >= this.#threshold;
+    const wires: WireImage[] = [];
+    for (const slot of plan.slots) {
+      if ('wire' in slot) {
+        wires.push(slot.wire);
+        continue;
+      }
+      const hit = this.#cache.size > 0 ? await this.#lookup(await this.#key(slot.local)) : undefined;
+      if (hit !== undefined) wires.push({ id: slot.local.id, upload_id: hit });
+      else if (upload) wires.push({ id: slot.local.id, upload_id: UPLOAD_ID_PLACEHOLDER });
+      else wires.push({ id: slot.local.id, media_type: slot.local.mediaType, data: this.#encode(slot.local) });
+    }
+    return wires;
   }
 
   /** Forgets the cache entries of these uploads, so the next request uploads the bytes again. */

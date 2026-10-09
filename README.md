@@ -106,6 +106,8 @@ How a local image travels is chosen for you, for the fastest answer:
 - **An uploaded image is reused.** The client remembers each upload by a SHA-256 of its bytes, in memory, until 5 minutes before the upload expires (an upload lives an hour). The same bytes are then sent by their upload id whatever their size, across `decide`, `decideMany`, session frames and batches, so they are never sent twice. Concurrent requests with the same bytes share one upload.
 - **A stale upload is replaced.** If the API reports an upload the client placed as expired, already used or missing, the client uploads the image again and resends the request once.
 
+A request body may be at most 25 MiB (26,214,400 bytes). Inline images count toward it; uploaded images and URLs do not, so with the default threshold a request with images stays far below it. The client measures each body as it would be sent before sending it (an image it would upload counted by its upload id, so nothing is uploaded to measure) and throws `RequestTooLargeError` for one over the limit.
+
 Set `inlineThreshold` on the client to move the cut-off: `0` uploads every local image, a large value sends everything inline. `dn.upload(images)` uploads 1 to 16 images whatever their size and returns their upload ids, for use later with `Image.fromUploadId`. No image is ever resized or re-encoded.
 
 Every image is checked before anything is sent: ids present and unique, URLs by the rules above that need no network, an upload id's media type one of the three, local bytes JPEG, PNG or WebP by their first bytes (a media type you give must match them), at most 10 MiB each, and at most 40 megapixels, read from the image header without decoding the image. A fault throws `BadRequestError` with the API's message, and no request is made. A request holds at most 16 images; a 17th throws `ValidationError` as the API answers it (a `too_long` entry on the images). An unreadable file throws a `TypeError` when the `Image` is made. Reading a path needs a runtime with a file system (Node, Deno, Bun); on edge runtimes pass bytes or a URL.
@@ -346,6 +348,7 @@ The client checks every request against every fixed rule the API documents befor
 | A session's `window` outside 1 to 64 or `ttl_seconds` outside 1 to 3,600 | `ValidationError`, the API's entries |
 | A session frame (see Sessions) | `BadRequestError`, `api_usage_error` |
 | A batch request without a `customId`, an empty or repeated one, an `add` with no requests, a `batches.list` `offset` below 0 or `limit` outside 1 to 100 | `BadRequestError`, `api_usage_error` |
+| A body over 25 MiB (26,214,400 bytes) as it would be sent: a request, each `decideMany` request (none is sent when one is over), each batch line with its `customId` | `RequestTooLargeError`, `request_too_large_error` |
 
 Some limits are stated only by `/v1/models`: whether a model answers `number` questions or serves sessions, its largest session window, how many requests a batch holds and how long a `customId` may be. Once you have called `models()` on a client, it checks those against what it read, and a value `/v1/models` restates (such as the largest window) replaces the documented one; before that, those checks are left to the API. A request's model is matched to an entry by its name, else by the entry that states that name as its `alias` or its pinned `version`, so `decisionnode-latest` finds the limits of the version it stands for; a name the list does not state is left to the API. Token counts and anything that depends on the server's state, such as whether an upload is still live, stay the API's to judge. `decideRaw` sends its body exactly as given, unchecked.
 
@@ -526,6 +529,7 @@ Every error is a `DecisionNodeError`, exported under that name, with `status`, `
 | 402 | `InsufficientCreditError` | |
 | 403 | `RefusalError` when the request was refused under the usage policy (`category`, `safety`); every other 403 is a `PermissionDeniedError`: a booster turned off for your workspace (`booster_not_enabled`) or a suspended workspace, told apart by `errorType` | `category`, `safety` on a `RefusalError` |
 | 404 | `NotFoundError` | |
+| 413 | `RequestTooLargeError`: the body is over 25 MiB; never retried. Send large images as uploads | |
 | 422 | `ValidationError` | `entries` |
 | 429 | `RateLimitError`; `SessionLimitError` when the key holds as many sessions as it may | `retryAfter` (seconds, at most 60) |
 | 529 | `OverloadedError`, also when a required booster failed (`booster_unavailable`) | `retryAfter` (seconds, at most 60) |
@@ -556,7 +560,7 @@ try {
 
 ### Retries and timeouts
 
-Each attempt times out after 10 seconds, counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors. The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404 and 422 are never retried. A decision changes nothing on the server, so a retry is always safe.
+Each attempt times out after 10 seconds, counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors. The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404, 413 and 422 are never retried. A decision changes nothing on the server, so a retry is always safe.
 
 Each storage PUT of an upload has its own timeout, `uploadTimeout` (60 seconds by default), apart from `timeout`, since a large image on a slow uplink needs longer than a decision. It is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. A `403` after the upload URL's 5 minutes have passed, by the client's clock, gets a fresh URL once; a second such `403` is thrown. Batch results stream in, and each read of the stream must bring data within the timeout.
 

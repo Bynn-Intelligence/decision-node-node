@@ -88,6 +88,13 @@ export class RefusalError extends DecisionNodeError {
 /** 404. */
 export class NotFoundError extends DecisionNodeError {}
 
+/**
+ * 413, or a body found over the API's limit of 26,214,400 bytes (25 MiB)
+ * before it was sent (then with no status and no request id). Never retried:
+ * the same body is refused again. Send large images as uploads.
+ */
+export class RequestTooLargeError extends DecisionNodeError {}
+
 /** 422: the request body did not validate. */
 export class ValidationError extends DecisionNodeError {
   /** The server's list of validation entries. */
@@ -150,6 +157,7 @@ for (const [name, cls] of Object.entries({
   PermissionDeniedError,
   RefusalError,
   NotFoundError,
+  RequestTooLargeError,
   ValidationError,
   RateLimitError,
   SessionLimitError,
@@ -226,6 +234,7 @@ export function errorFromResponse(status: number, headers: Record<string, string
     return new PermissionDeniedError(message, fields);
   }
   if (status === 404) return new NotFoundError(message, fields);
+  if (status === 413) return new RequestTooLargeError(message, fields);
   if (status === 422) return new ValidationError(message, { ...fields, entries });
   if (status === 429 && errorType === 'session_limit_exceeded') {
     return new SessionLimitError(message, { ...fields, retryAfter: retryAfterSeconds(headers) });

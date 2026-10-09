@@ -5,12 +5,19 @@
  */
 import { boostersWire } from './boosters.js';
 import { checkRequest, entry, heldNumber, type Entry, type HeldLimits } from './checks.js';
+import { RequestTooLargeError } from './errors.js';
 import { Image, MAX_IMAGES } from './image.js';
 import { MAX_VIDEOS } from './video.js';
 import { serialise } from './transport.js';
 import type { ImagePlacer, ImageInput, ImagePlan } from './uploads.js';
 import type { WireImage } from './image.js';
 import { checkVideos, videoWires, type VideoInput } from './video.js';
+
+/** The API's request body limit in bytes, 25 MiB. */
+const MAX_BODY_BYTES = 26_214_400;
+
+const BODY_TOO_LARGE =
+  'The request body is over 26,214,400 bytes (25 MiB). Send large images as uploads (POST /v1/uploads) and name them by upload_id.';
 
 export interface Prepared {
   /** The body without `images`, as JSON text. */
@@ -55,7 +62,40 @@ export async function prepare(
   checkRequest(probe, limits, [], imageIds, countEntries(images ?? [], wires, limits));
   const plan = await placer.check(images, limits);
   checkVideos(wires, images);
-  return { head: serialise({ ...fields, ...tail }), plan };
+  const head = serialise({ ...fields, ...tail });
+  checkBodySize(withImages(head, plan === null ? null : await placer.project(plan)));
+  return { head, plan };
+}
+
+/**
+ * The body as it would be sent, against the API's 25 MiB: over it, the API's
+ * `RequestTooLargeError`, raised before anything is sent or uploaded.
+ */
+function checkBodySize(body: string): void {
+  // Each character is 1 to 3 bytes in UTF-8 (a surrogate pair 4 for 2), so most bodies need no count.
+  if (body.length * 3 <= MAX_BODY_BYTES) return;
+  const size = utf8Length(body);
+  if (size > MAX_BODY_BYTES) {
+    throw new RequestTooLargeError(BODY_TOO_LARGE, {
+      errorType: 'request_too_large_error',
+      reason: `the body is ${size} bytes; the limit is ${MAX_BODY_BYTES}`,
+    });
+  }
+}
+
+/** The length of the text in UTF-8, as it goes on the wire. */
+function utf8Length(text: string): number {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      n += 4;
+      i++;
+    } else n += 3;
+  }
+  return n;
 }
 
 /** The image limit: the held `/v1/models` entry's `max_images`, else its `images.max_images`, else 16. */

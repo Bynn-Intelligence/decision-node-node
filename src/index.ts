@@ -140,6 +140,7 @@ export {
   PermissionDeniedError,
   RateLimitError,
   RefusalError,
+  RequestTooLargeError,
   ServerError,
   SessionLimitError,
   TimeoutError,
