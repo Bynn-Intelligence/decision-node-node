@@ -56,8 +56,13 @@ export class Booster {
     this.options = options.options ?? undefined;
   }
 
-  /** The booster as the API takes it, each setting only when given. */
-  toJSON(): WireBooster {
+  /**
+   * The booster as it is sent: its name alone when no setting is given, so a
+   * list of such boosters is the plain list of names; else the object form,
+   * each setting only when given.
+   */
+  toJSON(): BoosterName | WireBooster {
+    if (this.images === undefined && this.require === undefined && this.options === undefined) return this.name;
     const out: WireBooster = { name: this.name };
     if (this.images !== undefined) out.images = this.images;
     if (this.require !== undefined) out.require = this.require;
@@ -247,6 +252,12 @@ export class Evidence<R extends Reading = Reading> {
   readonly status: 'ok' | 'timeout' | 'error' | 'skipped' | (string & {}) | null;
   /** How long the booster took, in milliseconds. */
   readonly latencyMs: number | null;
+  /**
+   * The calls of this booster billed on this request (a picture it read for
+   * the workspace in the last hour is not billed again); `null` when the
+   * server did not send it.
+   */
+  readonly billedCalls: number | null;
   /** One reading per image read; empty unless `status` is `ok`. */
   readonly results: R[];
   /** The entry as received. */
@@ -258,6 +269,7 @@ export class Evidence<R extends Reading = Reading> {
     this.version = typeof r.version === 'string' ? r.version : null;
     this.status = typeof r.status === 'string' ? r.status : null;
     this.latencyMs = isNumber(r.latency_ms) ? r.latency_ms : null;
+    this.billedCalls = isInteger(r.billed_calls) ? r.billed_calls : null;
     this.results = (Array.isArray(r.results) ? r.results : []).map((x: unknown) => parseReading(booster, x)) as R[];
   }
 }

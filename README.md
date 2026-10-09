@@ -251,7 +251,7 @@ await dn.decide({
 });
 ```
 
-`new Booster(name, { images, require, options })` is sent as `{ name: 'ai_generated', images: ['c3d4'], require: true }`, each setting only when given; a plain object in that form works too:
+`new Booster(name, { images, require, options })` is sent as `{ name: 'ai_generated', images: ['c3d4'], require: true }`, each setting only when given; a plain object in that form works too. A `Booster` with no setting is sent as its name, so the request stays the plain list:
 
 | Setting | |
 |---|---|
@@ -268,6 +268,7 @@ Boosters read images in every form (URL, inline or uploaded), and every question
 | `version` | The version of the booster that read, such as `age-v3` |
 | `status` | `ok`; `timeout` (no answer in time); `error`; `skipped` (none of the request's images is one it reads) |
 | `latencyMs` | How long the booster took |
+| `billedCalls` | The calls of this booster billed on this request; a picture it read for your workspace in the last hour is not billed again |
 | `results` | One reading per image read, empty unless `status` is `ok` |
 | `raw` | The entry as the API sent it |
 

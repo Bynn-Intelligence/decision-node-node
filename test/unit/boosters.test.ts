@@ -46,6 +46,7 @@ const EVIDENCE = {
     version: 'age-v3',
     status: 'ok',
     latency_ms: 212,
+    billed_calls: 2,
     results: [
       { image: 'a1b2', age_years: 27, low: 22, high: 33, confidence: 0.81, faces: 1 },
       { image: 'c3d4', faces: 0 },
@@ -97,7 +98,8 @@ describe('the boosters option', () => {
       'age',
       { name: 'ai_generated', images: ['c3d4'], require: true },
       { name: 'moderation', require: false, options: { level: 'strict' } },
-      { name: 'faces' },
+      // A Booster with no setting goes as its name, the plain list's form.
+      'faces',
       { name: 'text', images: ['a1b2'] },
     ]);
   });
@@ -206,7 +208,9 @@ describe('evidence', () => {
     expect(Object.keys(d.evidence!)).toEqual(['age', 'ai_generated']);
     const age = d.evidence!.age!;
     expect(age).toBeInstanceOf(Evidence);
-    expect([age.version, age.status, age.latencyMs]).toEqual(['age-v3', 'ok', 212]);
+    expect([age.version, age.status, age.latencyMs, age.billedCalls]).toEqual(['age-v3', 'ok', 212, 2]);
+    // A server that does not send billed_calls: null, never 0.
+    expect(d.evidence!.ai_generated!.billedCalls).toBeNull();
     const [first, second] = age.results;
     expect(first).toBeInstanceOf(AgeReading);
     expect(first).toMatchObject({ image: 'a1b2', faces: 1, ageYears: 27, low: 22, high: 33, confidence: 0.81 });
@@ -324,7 +328,7 @@ describe('evidence', () => {
 
   it('reads an entry that is not an object as empty, and no evidence as null', () => {
     const d = new Decision({ model: 'm', answers: {}, evidence: { age: 'broken' } }, {});
-    expect(d.evidence!.age).toMatchObject({ version: null, status: null, latencyMs: null, results: [], raw: 'broken' });
+    expect(d.evidence!.age).toMatchObject({ version: null, status: null, latencyMs: null, billedCalls: null, results: [], raw: 'broken' });
     const plain = new Decision({ model: 'm', answers: {}, usage: { input_tokens: 1, output_tokens: 0 } }, {});
     expect(plain.evidence).toBeNull();
     expect([plain.usage.boosterTokens, plain.usage.boosters]).toEqual([null, null]);

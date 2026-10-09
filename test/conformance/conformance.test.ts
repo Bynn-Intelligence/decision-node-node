@@ -224,7 +224,7 @@ function normEvidence(evidence: Record<string, Evidence | undefined> | null): Js
   return Object.fromEntries(
     Object.entries(evidence).map(([name, e]) => [
       name,
-      { version: e!.version, status: e!.status, latency_ms: e!.latencyMs, results: e!.results.map(normReading) },
+      { version: e!.version, status: e!.status, latency_ms: e!.latencyMs, billed_calls: e!.billedCalls, results: e!.results.map(normReading) },
     ]),
   );
 }
