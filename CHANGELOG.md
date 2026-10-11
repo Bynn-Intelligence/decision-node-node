@@ -16,6 +16,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SPEC_VERSION` is 
 - An error whose body is not JSON (a page from the service's edge or a proxy, or an empty body) is classed by its status alone, with `errorType` `null`, `requestId` and `reason` from the headers, and the message `HTTP <status> <text>` from a fixed table (`HTTP 413 Content Too Large`), followed by the request id when sent. The page is never read into the error (`body` is `undefined`). A 400 is never a `ContextLimitError` and a 403 never a `RefusalError` without the JSON body; retries are unchanged.
 - An image id over 64 characters, counted as Unicode code points, is refused before anything is sent: `BadRequestError` `api_usage_error`, `Image <n>: its id is longer than 64 characters.`
 - Fine-tuned models: a name such as `decisionnode-moe@acme/fraud` or `...:3` is sent as given in `model`, and `Decision.model` is the pinned name that answered. `ModelInfo` gains `fineTuned`, `base`, `adapterVersion` and `status`, each `null` on a catalogue entry.
+- Batch results read some time after `results()` no longer come back empty: the client holds the response with its body until the results are read, since Node's fetch cancels the body of a response that is garbage collected first.
 
 ## 0.2.0 (unreleased)
 

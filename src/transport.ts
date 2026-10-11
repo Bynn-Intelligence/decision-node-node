@@ -42,6 +42,12 @@ export interface RawResponse {
   text: string;
   /** The body, unread, for a `stream` request that succeeded. */
   stream?: ReadableStream<Uint8Array> | null;
+  /**
+   * The response that owns `stream`. Hold it until the stream is read: some
+   * fetch implementations (Node's) cancel the body of a response that is
+   * garbage collected, and the stream then ends empty without an error.
+   */
+  owner?: unknown;
 }
 
 export interface RequestSpec {
@@ -377,7 +383,7 @@ export class Transport {
         }
         if (stream && isSuccess(response.status)) {
           handedOver = true;
-          return { status: response.status, headers: out, text: '', stream: response.body };
+          return { status: response.status, headers: out, text: '', stream: response.body, owner: response };
         }
         const text = await response.text();
         return { status: response.status, headers: out, text };

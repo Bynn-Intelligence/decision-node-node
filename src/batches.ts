@@ -175,13 +175,16 @@ export class BatchResult {
  * Iterate once with `for await`, or collect them with `toArray()`.
  */
 export class BatchResults implements AsyncIterable<BatchResult> {
-  readonly #stream: ReadableStream<Uint8Array> | null | undefined;
+  // The stream and the response that owns it, held together until the stream
+  // is read: Node's fetch cancels the body of a response that is garbage
+  // collected, and the results would then read as none.
+  readonly #body: { stream: ReadableStream<Uint8Array> | null | undefined; owner: unknown };
   readonly #timeout: number;
   readonly #signal: AbortSignal | undefined;
   #used = false;
 
-  constructor(stream: ReadableStream<Uint8Array> | null | undefined, timeout: number, signal: AbortSignal | undefined) {
-    this.#stream = stream;
+  constructor(stream: ReadableStream<Uint8Array> | null | undefined, timeout: number, signal: AbortSignal | undefined, owner?: unknown) {
+    this.#body = { stream, owner };
     this.#timeout = timeout;
     this.#signal = signal;
   }
@@ -189,8 +192,9 @@ export class BatchResults implements AsyncIterable<BatchResult> {
   async *[Symbol.asyncIterator](): AsyncGenerator<BatchResult, void, undefined> {
     if (this.#used) throw new TypeError('batch results can be read once; call results() again for another pass');
     this.#used = true;
-    if (!this.#stream) return;
-    const reader = this.#stream.getReader();
+    const stream = this.#body.stream;
+    if (!stream) return;
+    const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffered = '';
     try {
@@ -209,6 +213,8 @@ export class BatchResults implements AsyncIterable<BatchResult> {
       if (buffered.trim() !== '') yield parseLine(buffered);
     } finally {
       reader.releaseLock();
+      // Read to the end or given up: the response no longer needs holding.
+      this.#body.owner = undefined;
     }
   }
 
@@ -417,7 +423,7 @@ export class Batches {
       signal: options.signal,
       stream: true,
     });
-    return new BatchResults(res.stream, transport.timeout, options.signal);
+    return new BatchResults(res.stream, transport.timeout, options.signal, res.owner);
   }
 
   /** Cancels a batch (`POST /v1/batches/{id}/cancel`); lines already running finish. */
