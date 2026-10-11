@@ -19,6 +19,7 @@ import {
   Batch,
   Booster,
   Evidence,
+  OcrReading,
   UnknownReading,
   type Reading,
   BoxAnswer,
@@ -221,6 +222,7 @@ function normReading(r: Reading): Json {
       c2pa: r.c2pa,
     };
   }
+  if (r instanceof OcrReading) return { kind: 'ocr', image: r.image, text: r.text, truncated: r.truncated };
   if (r instanceof UnknownReading) return { kind: 'unknown', raw: r.raw };
   throw new Error(`a reading of class ${(r as object).constructor.name}`);
 }

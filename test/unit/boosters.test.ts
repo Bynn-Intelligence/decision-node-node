@@ -9,6 +9,7 @@ import {
   Decision,
   DecisionNode,
   Evidence,
+  OcrReading,
   Image,
   ModelInfo,
   OverloadedError,
@@ -123,7 +124,7 @@ describe('the boosters option', () => {
 
   it('sends the settings of the newer boosters as given, checking none of them', async () => {
     const { dn, calls } = client([OK_TRUTH]);
-    const prompt = 'x'.repeat(501);
+    const prompt = 'x'.repeat(2001);
     await dn.decide({
       questions: { q: truth('?') },
       boosters: ['face_detection', new Booster('ocr', { options: { prompt } }), new Booster('wanted_person', { options: { threshold: 0.8 } })],
@@ -135,16 +136,27 @@ describe('the boosters option', () => {
     ]);
   });
 
-  it('reads the reading of a newer booster as a generic one until this version types it', () => {
-    const d = new Decision(
-      {
-        model: 'm',
-        answers: {},
-        evidence: { ocr: { version: 'ocr-v1', status: 'ok', latency_ms: 90, results: [{ image: 'a', text: 'Total 12.00' }] } },
-      },
-      {},
-    );
-    expect(d.evidence!.ocr!.results[0]).toBeInstanceOf(UnknownReading);
+  it('reads ocr readings, an empty text included, and a malformed one as generic', () => {
+    const results = [
+      { image: 'receipt', text: 'Total 12.00', truncated: false },
+      { image: 'blank', text: '', truncated: false },
+      { image: 'long', text: '{}', truncated: true },
+      { image: 'a', text: 740, truncated: false },
+      { image: 'b', text: 'Total', truncated: 'yes' },
+      { image: 'c', truncated: false },
+      // truncated is always sent: a reading without it is generic.
+      { image: 'd', text: 'Total' },
+    ];
+    const d = new Decision({ model: 'm', answers: {}, evidence: { ocr: { version: 'ocr-v1', status: 'ok', latency_ms: 90, results } } }, {});
+    const [receipt, blank, long, ...bad] = d.evidence!.ocr!.results;
+    expect(receipt).toBeInstanceOf(OcrReading);
+    expect([(receipt as OcrReading).text, (receipt as OcrReading).truncated]).toEqual(['Total 12.00', false]);
+    expect((blank as OcrReading).text).toBe('');
+    expect((long as OcrReading).truncated).toBe(true);
+    expect(bad.every((r) => r instanceof UnknownReading)).toBe(true);
+    // A booster this version does not know is still generic.
+    const other = new Decision({ model: 'm', answers: {}, evidence: { face_detection: { status: 'ok', results: [{ image: 'a', faces: [] }] } } }, {});
+    expect(other.evidence!.face_detection!.results[0]).toBeInstanceOf(UnknownReading);
   });
 
   it('checks nothing about boosters locally: the server answers', async () => {

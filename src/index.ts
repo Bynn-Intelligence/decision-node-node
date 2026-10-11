@@ -80,6 +80,7 @@ export {
   AiGeneratedReading,
   Booster,
   Evidence,
+  OcrReading,
   UnknownReading,
   parseBoostersHeader,
   type BoosterInput,

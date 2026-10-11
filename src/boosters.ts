@@ -17,7 +17,7 @@ export type BoosterName = 'age' | 'ai_generated' | 'face_detection' | 'wanted_pe
  * Other keys are sent as given too, for settings a later booster adds.
  */
 export interface BoosterSettings {
-  /** `ocr`: what to read, an instruction of at most 500 characters ("the invoice total and date"). */
+  /** `ocr`: what to read, at most 2,000 characters: a task, an instruction ("the invoice total and date") or a JSON schema. */
   prompt?: string;
   /** `wanted_person`: its match threshold. */
   threshold?: number;
@@ -225,6 +225,32 @@ export class AiGeneratedReading {
 }
 
 /**
+ * An `ocr` reading of one image: the text the picture shows, in reading
+ * order, or the answer to the booster's `prompt` option.
+ */
+export class OcrReading {
+  /** The id of the image read. */
+  readonly image: string;
+  /** The text read; empty when the picture shows none, which is a reading, not a failure. */
+  readonly text: string;
+  /** `true` when the reading was cut at the model's context limit. */
+  readonly truncated: boolean;
+  /** The reading as received. */
+  readonly raw: Record<string, unknown>;
+
+  constructor(raw: Record<string, unknown>) {
+    this.raw = raw;
+    this.image = raw.image as string;
+    this.text = raw.text as string;
+    this.truncated = raw.truncated as boolean;
+  }
+
+  static wellFormed(r: Record<string, unknown>): boolean {
+    return typeof r.image === 'string' && typeof r.text === 'string' && typeof r.truncated === 'boolean';
+  }
+}
+
+/**
  * A reading of a booster this SDK version does not know, or one with a field
  * missing or of the wrong type. Every field is in `raw`; the decision does
  * not fail.
@@ -242,13 +268,14 @@ export class UnknownReading {
 }
 
 /** One reading of one image. */
-export type Reading = AgeReading | AiGeneratedReading | UnknownReading;
+export type Reading = AgeReading | AiGeneratedReading | OcrReading | UnknownReading;
 
 /** Parses one reading by the booster that made it. */
 export function parseReading(booster: string, raw: unknown): Reading {
   if (isObject(raw)) {
     if (booster === 'age' && AgeReading.wellFormed(raw)) return new AgeReading(raw);
     if (booster === 'ai_generated' && AiGeneratedReading.wellFormed(raw)) return new AiGeneratedReading(raw);
+    if (booster === 'ocr' && OcrReading.wellFormed(raw)) return new OcrReading(raw);
   }
   return new UnknownReading(raw);
 }
@@ -290,6 +317,7 @@ export class Evidence<R extends Reading = Reading> {
 export interface EvidenceByBooster {
   age?: Evidence<AgeReading | UnknownReading>;
   ai_generated?: Evidence<AiGeneratedReading | UnknownReading>;
+  ocr?: Evidence<OcrReading | UnknownReading>;
   [booster: string]: Evidence | undefined;
 }
 
