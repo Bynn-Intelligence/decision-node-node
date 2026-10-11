@@ -287,13 +287,16 @@ function count(value: unknown): number | null {
 }
 
 /**
- * A fallback answer: `decisionnode-1.0` had no ready worker, so
- * `decisionnode-1.0-flash` answered in its place.
+ * A fallback answer: the `decisionnode-moe` model asked for had no ready
+ * worker, so Flash answered in its place. Each is named by its pinned id.
  */
 export interface Fallback {
   /** The model that answered, from `x-decisionnode-fallback`; the same as `Decision.model`. */
   servedModel: string;
-  /** The model the request asked for, from `x-decisionnode-requested-model`. */
+  /**
+   * The model the request asked for, from `x-decisionnode-requested-model`:
+   * the family id for a family id or an older id, the pinned id for a pinned id.
+   */
   requestedModel: string | null;
 }
 
@@ -392,7 +395,7 @@ function field<T>(raw: Record<string, unknown>, name: string, check: (v: unknown
 
 /** One entry of `models()`. */
 export class ModelInfo {
-  /** The model id to send, for example `decisionnode-latest`. */
+  /** The model id to send, for example `decisionnode-moe`. */
   readonly name: string;
   readonly description: string;
   /** `YYYY-MM-DD`. */

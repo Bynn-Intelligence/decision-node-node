@@ -46,34 +46,34 @@ describe('configuration', () => {
   it('reads the environment when no argument is given', () => {
     process.env.DECISIONNODE_API_KEY = 'dn_env';
     process.env.DECISIONNODE_BASE_URL = 'https://env.example.test/';
-    process.env.DECISIONNODE_MODEL = 'decisionnode-1.0-flash';
+    process.env.DECISIONNODE_MODEL = 'decisionnode-flash';
     const dn = new DecisionNode();
     expect(dn.baseUrl).toBe('https://env.example.test');
-    expect(dn.model).toBe('decisionnode-1.0-flash');
+    expect(dn.model).toBe('decisionnode-flash');
   });
 
   it('prefers arguments over the environment', async () => {
     process.env.DECISIONNODE_API_KEY = 'dn_env';
-    process.env.DECISIONNODE_MODEL = 'decisionnode-1.0-flash';
-    const { dn, calls } = client([OK_TRUTH], { apiKey: 'dn_arg', model: 'decisionnode-1.0' });
+    process.env.DECISIONNODE_MODEL = 'decisionnode-flash';
+    const { dn, calls } = client([OK_TRUTH], { apiKey: 'dn_arg', model: 'decisionnode-moe' });
     await dn.decide({ questions: { q: truth('?') } });
     expect(calls[0]!.headers.authorization).toBe('Bearer dn_arg');
-    expect(JSON.parse(calls[0]!.body!).model).toBe('decisionnode-1.0');
+    expect(JSON.parse(calls[0]!.body!).model).toBe('decisionnode-moe');
   });
 
   it('treats empty strings as not given', async () => {
     process.env.DECISIONNODE_API_KEY = 'dn_env';
     process.env.DECISIONNODE_BASE_URL = 'https://env.example.test';
-    process.env.DECISIONNODE_MODEL = 'decisionnode-1.0-flash';
+    process.env.DECISIONNODE_MODEL = 'decisionnode-flash';
     const f = fakeFetch([OK_TRUTH]);
     const dn = new DecisionNode({ apiKey: '', baseUrl: '', model: '', fetch: f.fetch, fetchHonoursManualRedirect: true });
     expect(dn.baseUrl).toBe('https://env.example.test');
-    expect(dn.model).toBe('decisionnode-1.0-flash');
+    expect(dn.model).toBe('decisionnode-flash');
     await dn.decide({ questions: { q: truth('?') }, model: '' });
     expect(f.calls[0]!.headers.authorization).toBe('Bearer dn_env');
-    expect(JSON.parse(f.calls[0]!.body!).model).toBe('decisionnode-1.0-flash');
+    expect(JSON.parse(f.calls[0]!.body!).model).toBe('decisionnode-flash');
     delete process.env.DECISIONNODE_MODEL;
-    expect(new DecisionNode({ apiKey: 'k', model: '' }).model).toBe('decisionnode-latest');
+    expect(new DecisionNode({ apiKey: 'k', model: '' }).model).toBe('decisionnode-moe');
   });
 
   it('fails before sending when the key is an empty string and none is set', async () => {
@@ -90,7 +90,7 @@ describe('configuration', () => {
   it('uses the defaults', () => {
     const dn = new DecisionNode({ apiKey: 'k' });
     expect(dn.baseUrl).toBe('https://api.decisionnode.com');
-    expect(dn.model).toBe('decisionnode-latest');
+    expect(dn.model).toBe('decisionnode-moe');
     expect(dn.timeout).toBe(10_000);
     expect(dn.maxRetries).toBe(2);
   });
@@ -142,13 +142,13 @@ describe('decide', () => {
     expect(calls[0]!.headers['content-type']).toBe('application/json');
     expect(calls[0]!.headers['x-team']).toBe('support');
     expect(JSON.parse(calls[0]!.body!)).toEqual({
-      model: 'decisionnode-latest',
+      model: 'decisionnode-moe',
       state: { ticket: 'charged twice' },
       questions: { q: { type: 'truth', instructions: 'Escalate?' } },
     });
     expect(d.answers.q).toBeInstanceOf(TruthAnswer);
     expect(d.answers.q.truth).toBe(0.94);
-    expect(d.model).toBe('decisionnode-1.0');
+    expect(d.model).toBe('decisionnode-moe-0.9.0-rc1');
     expect(d.requestId).toBe('req_1');
     expect(d.latencyMs).toBe(23);
     expect(d.safety).toEqual({ checked: true, harm: 0.031, selfHarm: 0.004, flagged: [] });
@@ -242,7 +242,7 @@ describe('decide', () => {
 describe('helpers', () => {
   const answer = (id: string, a: unknown) => ({
     status: 200,
-    body: { model: 'decisionnode-1.0', answers: { [id]: a }, usage: { input_tokens: 1, output_tokens: 0 } },
+    body: { model: 'decisionnode-moe-0.9.0-rc1', answers: { [id]: a }, usage: { input_tokens: 1, output_tokens: 0 } },
   });
 
   it('check sends one truth question under the id check', async () => {
@@ -268,11 +268,11 @@ describe('helpers', () => {
     const { dn, calls } = client([
       answer('score', { type: 'score', score: 1.2, confidence: 0.5, legend: { '0': 'a', '1': 'b' }, probabilities: { '0': 0.4, '1': 0.6 } }),
     ]);
-    const a = await dn.score({ state: 's', instructions: 'How?', levels: ['a', 'b'], model: 'decisionnode-1.0-flash' });
+    const a = await dn.score({ state: 's', instructions: 'How?', levels: ['a', 'b'], model: 'decisionnode-flash' });
     expect(a).toBeInstanceOf(ScoreAnswer);
     expect(a.probabilities[1]).toBe(0.6);
     const body = JSON.parse(calls[0]!.body!);
-    expect(body.model).toBe('decisionnode-1.0-flash');
+    expect(body.model).toBe('decisionnode-flash');
     expect(body.questions.score).toEqual({ type: 'score', instructions: 'How?', criteria: ['a', 'b'] });
   });
 
@@ -310,7 +310,7 @@ describe('helpers', () => {
   const ALL_HELPERS = {
     status: 200,
     body: {
-      model: 'decisionnode-1.0',
+      model: 'decisionnode-moe-0.9.0-rc1',
       answers: {
         check: { type: 'truth', truth: 0.7 },
         classify: { type: 'choice', choice: 'a', confidence: 0.5, probabilities: { a: 0.75, b: 0.25 } },
@@ -331,7 +331,7 @@ describe('helpers', () => {
     const { dn, calls } = client([
       {
         status: 200,
-        body: { model: 'decisionnode-1.0', answers, usage: {} },
+        body: { model: 'decisionnode-moe-0.9.0-rc1', answers, usage: {} },
         headers: { 'x-request-id': 'req_h', 'x-decisionnode-error': 'the answer could not be completed' },
       },
     ]);
@@ -352,7 +352,7 @@ describe('helpers', () => {
   it.each(['check', 'classify', 'score', 'gate'] as const)('%s takes images and a model', async (method) => {
     const { dn, calls } = client([ALL_HELPERS]);
     const images = [Image.fromBytes('photo', PNG)];
-    const model = 'decisionnode-1.0-flash';
+    const model = 'decisionnode-flash';
     if (method === 'check') await dn.check({ instructions: '?', images, model });
     if (method === 'classify') await dn.classify({ instructions: '?', options: ['a', 'b'], images, model });
     if (method === 'score') await dn.score({ instructions: '?', levels: ['low', 'high'], images, model });
@@ -371,7 +371,7 @@ describe('helpers', () => {
 
   it('models reads the list and its limits', async () => {
     const { dn, calls } = client([
-      { status: 200, body: { models: [{ name: 'decisionnode-1.0', description: 'd', release_date: '2026-10-01', max_images: 4 }] } },
+      { status: 200, body: { models: [{ name: 'decisionnode-moe', description: 'd', release_date: '2026-10-01', max_images: 4 }] } },
     ]);
     const models = await dn.models();
     expect(calls[0]!.method).toBe('GET');
@@ -383,7 +383,7 @@ describe('helpers', () => {
 
   it('decideRaw sends the body as given and returns the parsed body', async () => {
     const { dn, calls } = client([{ status: 200, text: '{"answers":{},"future":[1,2.5,null]}' }]);
-    const body = { model: 'decisionnode-1.0', questions: { q: { type: 'truth', instructions: '?' } }, extra: true };
+    const body = { model: 'decisionnode-moe', questions: { q: { type: 'truth', instructions: '?' } }, extra: true };
     const out = await dn.decideRaw<{ future: unknown[] }>(body);
     expect(JSON.parse(calls[0]!.body!)).toEqual(body);
     expect(out.future).toEqual([1, 2.5, null]);

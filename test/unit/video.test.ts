@@ -19,7 +19,7 @@ const Q = { q: truth('Does a person fall in the video?') };
 
 /** Answers every question of the request with a truth of 0.4. */
 function answering(extra: Record<string, unknown> = {}): Reply[] {
-  return [{ status: 200, body: { model: 'decisionnode-1.0', answers: {}, usage: { input_tokens: 9, output_tokens: 0 }, ...extra } }];
+  return [{ status: 200, body: { model: 'decisionnode-moe-0.9.0-rc1', answers: {}, usage: { input_tokens: 9, output_tokens: 0 }, ...extra } }];
 }
 
 function client(replies: Reply[] = answering()) {

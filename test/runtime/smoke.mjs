@@ -23,7 +23,7 @@ const d = await dn.decide({
 if (!['billing', 'bug'].includes(d.answers.route.choice)) fail('route');
 if (typeof d.answers.urgency.score !== 'number') fail('urgency');
 if (typeof d.answers.escalate.truth !== 'number') fail('escalate');
-if (!d.requestId || d.model !== 'decisionnode-1.0') fail('headers');
+if (!d.requestId || !d.model.startsWith('decisionnode-moe-')) fail('headers');
 
 const models = await dn.models();
 if (models.length < 2) fail('models');

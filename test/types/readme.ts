@@ -44,7 +44,7 @@ export async function readme() {
   new DecisionNode({
     apiKey: 'your-api-key',
     baseUrl: 'https://example.com',
-    model: 'decisionnode-latest',
+    model: 'decisionnode-moe',
     timeout: 10_000,
     maxRetries: 2,
     headers: { 'x-team': 'support' },
@@ -67,7 +67,7 @@ export async function readme() {
   void g.answers.risk.score;
 
   await dn.decideRaw({
-    model: 'decisionnode-latest',
+    model: 'decisionnode-moe',
     state: 'Customer: refund me.',
     questions: { refund: { type: 'truth', instructions: 'Is this a refund request?' } },
   });

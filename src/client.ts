@@ -45,7 +45,7 @@ export { DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT };
 export type { ClockFn, FetchLike, ImageInput, SleepFn };
 
 export const DEFAULT_BASE_URL = 'https://api.decisionnode.com';
-export const DEFAULT_MODEL = 'decisionnode-latest';
+export const DEFAULT_MODEL = 'decisionnode-moe';
 /** Milliseconds per attempt. */
 export const DEFAULT_TIMEOUT = 10_000;
 export const DEFAULT_MAX_RETRIES = 2;
@@ -62,7 +62,7 @@ export interface ClientOptions {
   baseUrl?: string | null;
   /**
    * The model for calls that name none. Default: `DECISIONNODE_MODEL`, else
-   * `decisionnode-latest`. An empty string counts as not given.
+   * `decisionnode-moe`. An empty string counts as not given.
    */
   model?: string | null;
   /**
@@ -149,7 +149,7 @@ export interface DecideParams<Q extends Questions = Questions> {
   videos?: readonly VideoInput[] | null;
   /**
    * Overrides the client's model for this call: a catalogue id, or one of your
-   * workspace's fine-tuned models (`decisionnode-1.0-flash@acme/fraud`, pinned
+   * workspace's fine-tuned models (`decisionnode-moe@acme/fraud`, pinned
    * `...:3`), sent as given. An empty string counts as not given.
    */
   model?: string | null;
@@ -160,9 +160,9 @@ export interface DecideParams<Q extends Questions = Questions> {
    */
   boosters?: readonly BoosterInput[] | null;
   /**
-   * `false`: a `decisionnode-1.0` request that no ready worker can take at
+   * `false`: a `decisionnode-moe` request that no ready worker can take at
    * once gets the 529 `OverloadedError` (retried) instead of an answer from
-   * `decisionnode-1.0-flash`. Left out, the API's default (`true`) applies.
+   * Flash. Left out, the API's default (`true`) applies.
    */
   fallback?: boolean | null;
 }

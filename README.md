@@ -308,7 +308,7 @@ try {
 const dn = new DecisionNode({
   apiKey: 'your-api-key',       // default: DECISIONNODE_API_KEY
   baseUrl: 'https://...',       // default: DECISIONNODE_BASE_URL, else https://api.decisionnode.com
-  model: 'decisionnode-latest', // default: DECISIONNODE_MODEL, else decisionnode-latest
+  model: 'decisionnode-moe',    // default: DECISIONNODE_MODEL, else decisionnode-moe
   timeout: 10_000,              // milliseconds per attempt, above 0
   maxRetries: 2,                // retries after the first attempt, 0 or more
   inlineThreshold: 524_288,     // bytes; local images under it go inline, see Images
@@ -364,7 +364,7 @@ The client checks every request against every fixed rule the API documents befor
 | A batch request without a `customId`, an empty or repeated one, an `add` with no requests, a `batches.list` `offset` below 0 or `limit` outside 1 to 100 | `BadRequestError`, `api_usage_error` |
 | A body over 25 MiB (26,214,400 bytes) as it would be sent: a request, each `decideMany` request (none is sent when one is over), each batch line with its `customId` | `RequestTooLargeError`, `request_too_large_error` |
 
-Some limits are stated only by `/v1/models`: whether a model answers `number` questions or serves sessions, its largest session window, how many requests a batch holds and how long a `customId` may be. Once you have called `models()` on a client, it checks those against what it read, and a value `/v1/models` restates (such as the largest window) replaces the documented one; before that, those checks are left to the API. A request's model is matched to an entry by its name, else by the entry that states that name as its `alias` or its pinned `version`, so `decisionnode-latest` finds the limits of the version it stands for; a name the list does not state is left to the API. Token counts and anything that depends on the server's state, such as whether an upload is still live, stay the API's to judge. `decideRaw` sends its body exactly as given, unchecked.
+Some limits are stated only by `/v1/models`: whether a model answers `number` questions or serves sessions, its largest session window, how many requests a batch holds and how long a `customId` may be. Once you have called `models()` on a client, it checks those against what it read, and a value `/v1/models` restates (such as the largest window) replaces the documented one; before that, those checks are left to the API. A request's model is matched to an entry by its name, else by the entry that states that name as its `alias` or its pinned `version`, so `decisionnode-moe` finds the limits of the version it stands for; a name the list does not state is left to the API. Token counts and anything that depends on the server's state, such as whether an upload is still live, stay the API's to judge. `decideRaw` sends its body exactly as given, unchecked.
 
 To check a request without sending it, for example to validate input from a form before you queue it, pass the same arguments to `checkRequest`. It runs every check the call would run, with the limits held from `models()`, and throws the same error; it sends nothing and uploads nothing, and resolves when the request would be sent:
 
@@ -428,7 +428,7 @@ The state sent is `{ action, context }`.
 
 ```ts
 const body = await dn.decideRaw({
-  model: 'decisionnode-latest',
+  model: 'decisionnode-moe',
   state: 'Customer: refund me.',
   questions: { refund: { type: 'truth', instructions: 'Is this a refund request?' } },
 });
@@ -613,21 +613,22 @@ models.map((m) => [m.name, m.limits]);
 
 | Model | |
 |---|---|
-| `decisionnode-latest` | The main model, moving with each release (default) |
-| `decisionnode-flash-latest` | The fast, lower-cost model, moving with each release |
-| `decisionnode-1.0`, `decisionnode-1.0-flash` | Pinned versions |
+| `decisionnode-moe` | The main model, always its current release (default) |
+| `decisionnode-flash` | The fast, lower-cost model, always its current release |
+
+A pinned release is `decisionnode-<family>-<version>`, for example `decisionnode-moe-<version>`, with the versions `models()` lists. Every answer names the pinned id that answered in `decision.model`, so you can log which release decided. `model` is free text: a pinned id, a fine-tuned model's name, and the older ids the API still accepts (`decisionnode-1.0`, `decisionnode-1.0-flash`, `decisionnode-latest`, `decisionnode-flash-latest`) are sent as given.
 
 Limits differ by model version; `models()` returns each model's published limits in `limits`, wire names as sent. The number, upload, session and batch limits are also typed fields: `numberOneQuestionValues`, `numberMaxGridValues`, `numberDefaultRange`, `numberDefaultStep`, `uploadMaxBytes`, `uploadTtlSeconds`, `uploadMediaTypes`, `sessions` and `batch`, each `null` when a model does not publish it.
 
 ### Fallback
 
-A request for `decisionnode-1.0` that no ready worker can take at once is answered by `decisionnode-1.0-flash`, billed at Flash's price. `decision.model` is the model that answered, and `decision.fallback` names both models; it is `null` on an ordinary answer:
+A request for `decisionnode-moe` that no ready worker can take at once is answered by Flash, billed at Flash's price. `decision.model` is the model that answered, and `decision.fallback` names both: the model that answered by its pinned id, and the model asked for as it was asked (a family id or an older id as the family id, a pinned id as itself); it is `null` on an ordinary answer:
 
 ```ts
-const d = await dn.decide({ model: 'decisionnode-1.0', state, questions });
+const d = await dn.decide({ model: 'decisionnode-moe', state, questions });
 if (d.fallback !== null) {
-  d.fallback.servedModel;    // 'decisionnode-1.0-flash'
-  d.fallback.requestedModel; // 'decisionnode-1.0'
+  d.fallback.servedModel;    // 'decisionnode-flash-<version>', the model that answered
+  d.fallback.requestedModel; // 'decisionnode-moe', the model asked for
 }
 ```
 
@@ -638,8 +639,8 @@ With `fallback: false` such a request gets the 529 `OverloadedError` instead, re
 A model your workspace fine-tuned in the console is called by its name, `<base>@<workspace>/<name>`, which means the version deployed most recently, or `<base>@<workspace>/<name>:<n>` for one version:
 
 ```ts
-const d = await dn.decide({ model: 'decisionnode-1.0-flash@acme/fraud', state, questions });
-d.model; // 'decisionnode-1.0-flash@acme/fraud:3', the version that answered
+const d = await dn.decide({ model: 'decisionnode-moe@acme/fraud', state, questions });
+d.model; // 'decisionnode-moe@acme/fraud:3', the version that answered
 ```
 
 The name is sent as given, in `model` on any call or as the client's `model`. Only your workspace's keys can use it, and it answers like its base: the same question types, answers, limits and errors. A name that does not exist, a version that is not deployed and another workspace's model all throw `BadRequestError` with the message `Unknown model: <name>`.
@@ -652,7 +653,7 @@ The name is sent as given, in `model` on any call or as the client's `model`. On
 |---|---|---|---|
 | API key | `apiKey` | `DECISIONNODE_API_KEY` | none: a call without a key fails before sending |
 | Base URL | `baseUrl` | `DECISIONNODE_BASE_URL` | `https://api.decisionnode.com` |
-| Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-latest` |
+| Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-moe` |
 | Inline threshold | `inlineThreshold` | | `DEFAULT_INLINE_THRESHOLD`, 524,288 bytes |
 | Upload timeout | `uploadTimeout` | | `DEFAULT_UPLOAD_TIMEOUT`, 60,000 milliseconds per storage PUT |
 | Clock | `clock` | | `Date.now`; the time, in epoch milliseconds, that upload URLs and cached uploads are judged by |

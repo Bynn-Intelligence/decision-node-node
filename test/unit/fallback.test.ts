@@ -26,12 +26,12 @@ const sent = (body: string | undefined) => JSON.parse(body ?? '{}') as Record<st
 
 const FALLBACK_ANSWER = {
   status: 200,
-  body: { model: 'decisionnode-1.0-flash', answers: { q: { type: 'truth', truth: 0.9 } }, usage: { input_tokens: 9, output_tokens: 0 } },
+  body: { model: 'decisionnode-flash-0.9.0-rc1', answers: { q: { type: 'truth', truth: 0.9 } }, usage: { input_tokens: 9, output_tokens: 0 } },
   headers: {
     'x-request-id': 'req_f',
-    'x-decisionnode-model': 'decisionnode-1.0-flash',
-    'x-decisionnode-fallback': 'decisionnode-1.0-flash',
-    'x-decisionnode-requested-model': 'decisionnode-1.0',
+    'x-decisionnode-model': 'decisionnode-flash-0.9.0-rc1',
+    'x-decisionnode-fallback': 'decisionnode-flash-0.9.0-rc1',
+    'x-decisionnode-requested-model': 'decisionnode-moe-0.9.0-rc1',
   },
 };
 
@@ -98,9 +98,9 @@ describe('the fallback option', () => {
 describe('Decision.fallback', () => {
   it('names the model that answered and the one asked for on a fallback answer', async () => {
     const { dn } = client([FALLBACK_ANSWER]);
-    const d = await dn.decide({ questions: { q: truth('?') }, model: 'decisionnode-1.0' });
-    expect(d.fallback).toEqual({ servedModel: 'decisionnode-1.0-flash', requestedModel: 'decisionnode-1.0' });
-    expect(d.model).toBe('decisionnode-1.0-flash');
+    const d = await dn.decide({ questions: { q: truth('?') }, model: 'decisionnode-moe' });
+    expect(d.fallback).toEqual({ servedModel: 'decisionnode-flash-0.9.0-rc1', requestedModel: 'decisionnode-moe-0.9.0-rc1' });
+    expect(d.model).toBe('decisionnode-flash-0.9.0-rc1');
   });
 
   it('is null on an ordinary answer', async () => {
@@ -110,8 +110,8 @@ describe('Decision.fallback', () => {
   });
 
   it('keeps requestedModel null when only the served model is sent', () => {
-    const d = new Decision({ model: 'decisionnode-1.0-flash', answers: {} }, { 'x-decisionnode-fallback': 'decisionnode-1.0-flash' });
-    expect(d.fallback).toEqual({ servedModel: 'decisionnode-1.0-flash', requestedModel: null });
+    const d = new Decision({ model: 'decisionnode-flash-0.9.0-rc1', answers: {} }, { 'x-decisionnode-fallback': 'decisionnode-flash-0.9.0-rc1' });
+    expect(d.fallback).toEqual({ servedModel: 'decisionnode-flash-0.9.0-rc1', requestedModel: null });
   });
 
   it('is read from a batch line headers', () => {
@@ -119,9 +119,9 @@ describe('Decision.fallback', () => {
       custom_id: 'a',
       status: 200,
       body: FALLBACK_ANSWER.body,
-      headers: { 'X-DecisionNode-Fallback': 'decisionnode-1.0-flash', 'X-DecisionNode-Requested-Model': 'decisionnode-1.0' },
+      headers: { 'X-DecisionNode-Fallback': 'decisionnode-flash-0.9.0-rc1', 'X-DecisionNode-Requested-Model': 'decisionnode-moe-0.9.0-rc1' },
     });
-    expect(r.decision!.fallback).toEqual({ servedModel: 'decisionnode-1.0-flash', requestedModel: 'decisionnode-1.0' });
+    expect(r.decision!.fallback).toEqual({ servedModel: 'decisionnode-flash-0.9.0-rc1', requestedModel: 'decisionnode-moe-0.9.0-rc1' });
   });
 
   it('a fallback: false request answered 529 is an OverloadedError, retried as every 529', async () => {
@@ -131,7 +131,7 @@ describe('Decision.fallback', () => {
       headers: { 'retry-after-ms': '10' },
     };
     const { dn, calls } = client([overloaded]);
-    const err = await dn.decide({ questions: { q: truth('?') }, model: 'decisionnode-1.0', fallback: false }).catch((e: unknown) => e);
+    const err = await dn.decide({ questions: { q: truth('?') }, model: 'decisionnode-moe', fallback: false }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(OverloadedError);
     expect(calls).toHaveLength(3);
   });

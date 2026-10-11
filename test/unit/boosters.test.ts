@@ -72,7 +72,7 @@ const EVIDENCE = {
 const BOOSTED = {
   status: 200,
   body: {
-    model: 'decisionnode-1.0',
+    model: 'decisionnode-moe-0.9.0-rc1',
     answers: { q: { type: 'truth', truth: 0.97 } },
     evidence: EVIDENCE,
     usage: { input_tokens: 341, output_tokens: 0, booster_tokens: 72, boosters: 3 },
@@ -189,12 +189,12 @@ describe('the boosters option', () => {
   });
 
   it('sends a fine-tuned model name as given and reads the pinned name back', async () => {
-    const pinned = 'decisionnode-1.0-flash@acme/fraud:3';
+    const pinned = 'decisionnode-moe@acme/fraud:3';
     const { dn, calls } = client([{ status: 200, body: { model: pinned, answers: {} }, headers: { 'x-decisionnode-model': pinned } }], {
-      model: 'decisionnode-1.0-flash@acme/fraud',
+      model: 'decisionnode-moe@acme/fraud',
     });
     const d = await dn.decide({ questions: { q: truth('?') } });
-    expect(sent(calls[0]!.body).model).toBe('decisionnode-1.0-flash@acme/fraud');
+    expect(sent(calls[0]!.body).model).toBe('decisionnode-moe@acme/fraud');
     expect(d.model).toBe(pinned);
     await dn.decide({ questions: { q: truth('?') }, model: pinned });
     expect(sent(calls[1]!.body).model).toBe(pinned);
@@ -428,24 +428,24 @@ describe('booster errors', () => {
 
 describe('fine-tuned models in models()', () => {
   it('reads the four fields of a fine-tuned entry, and null on a catalogue entry', async () => {
-    const catalogue = { name: 'decisionnode-1.0-flash', description: 'Fast', release_date: '2026-10-01', version: 'decisionnode-1.0-flash-0.1.0', max_images: 16 };
+    const catalogue = { name: 'decisionnode-moe', description: 'Main', release_date: '2026-10-01', version: 'decisionnode-moe-0.9.0-rc1', max_images: 16 };
     const tuned = {
-      name: 'decisionnode-1.0-flash@acme/fraud:3',
+      name: 'decisionnode-moe@acme/fraud:3',
       description: 'Claims fraud',
       release_date: '2026-10-09',
-      version: 'decisionnode-1.0-flash@acme/fraud:3',
+      version: 'decisionnode-moe@acme/fraud:3',
       fine_tuned: true,
-      base: 'decisionnode-1.0-flash-0.1.0',
+      base: 'decisionnode-moe-0.9.0-rc1',
       adapter_version: 3,
       status: 'deployed',
       max_images: 16,
     };
-    const ready = { ...tuned, name: 'decisionnode-1.0-flash@acme/fraud:4', adapter_version: 4, status: 'ready' };
+    const ready = { ...tuned, name: 'decisionnode-moe@acme/fraud:4', adapter_version: 4, status: 'ready' };
     const { dn } = client([{ status: 200, body: { models: [catalogue, tuned, ready] } }]);
     const [c, t, r] = await dn.models();
     expect([c!.fineTuned, c!.base, c!.adapterVersion, c!.status]).toEqual([null, null, null, null]);
     expect(t).toBeInstanceOf(ModelInfo);
-    expect([t!.fineTuned, t!.base, t!.adapterVersion, t!.status]).toEqual([true, 'decisionnode-1.0-flash-0.1.0', 3, 'deployed']);
+    expect([t!.fineTuned, t!.base, t!.adapterVersion, t!.status]).toEqual([true, 'decisionnode-moe-0.9.0-rc1', 3, 'deployed']);
     expect(t!.limits).toMatchObject({ fine_tuned: true, adapter_version: 3, status: 'deployed', max_images: 16 });
     expect([r!.adapterVersion, r!.status]).toEqual([4, 'ready']);
   });

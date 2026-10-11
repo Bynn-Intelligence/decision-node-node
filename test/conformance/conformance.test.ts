@@ -88,7 +88,13 @@ function loadCases(kind: string): Json[] {
 
 // ---------------------------------------------------------------- comparison
 
+/** An expected {"$pattern": regex} (suite 1.11) matches any string the regex finds. */
+function isPattern(v: Json): boolean {
+  return v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 1 && typeof v.$pattern === 'string';
+}
+
 function same(a: Json, b: Json): boolean {
+  if (isPattern(a)) return typeof b === 'string' && new RegExp(a.$pattern).test(b);
   if (typeof a === 'boolean' || typeof b === 'boolean') return a === b;
   if (typeof a === 'number' && typeof b === 'number') return a === b;
   if (a === null || b === null) return a === b;
@@ -109,7 +115,7 @@ function short(v: Json): string {
 }
 
 function match(expected: Json, actual: Json, path: string): void {
-  if (expected && typeof expected === 'object' && !Array.isArray(expected) && actual && typeof actual === 'object' && !Array.isArray(actual)) {
+  if (expected && typeof expected === 'object' && !Array.isArray(expected) && !isPattern(expected) && actual && typeof actual === 'object' && !Array.isArray(actual)) {
     for (const [k, v] of Object.entries(expected)) {
       if (!(k in actual)) throw new Error(`${path}.${k}: missing (expected ${short(v)})`);
       if (EXACT.has(k)) {

@@ -54,7 +54,7 @@ describe('parseSafety', () => {
 describe('answers', () => {
   it('keeps long floats as sent', () => {
     const body = JSON.parse(
-      '{"model":"decisionnode-1.0","answers":{"r":{"type":"choice","choice":"a","confidence":0.64,"probabilities":{"a":0.8200000000000001,"b":0.18}}},"usage":{"input_tokens":1,"output_tokens":0}}',
+      '{"model":"decisionnode-moe-0.9.0-rc1","answers":{"r":{"type":"choice","choice":"a","confidence":0.64,"probabilities":{"a":0.8200000000000001,"b":0.18}}},"usage":{"input_tokens":1,"output_tokens":0}}',
     );
     const d = new Decision(body, {});
     const a = d.answers.r as ChoiceAnswer;
@@ -112,7 +112,7 @@ describe('answers', () => {
 
   it('reads headers into the decision', () => {
     const d = new Decision(
-      { model: 'decisionnode-1.0', answers: {}, usage: { input_tokens: 3, output_tokens: 0 } },
+      { model: 'decisionnode-moe-0.9.0-rc1', answers: {}, usage: { input_tokens: 3, output_tokens: 0 } },
       { 'x-request-id': 'req_9', 'x-decisionnode-latency-ms': '12.5', 'x-decisionnode-safety': 'harm=0.2, self_harm=0.1' },
     );
     expect(d.requestId).toBe('req_9');
@@ -156,7 +156,7 @@ describe('answers', () => {
   });
 
   it('puts every extra model field in limits', () => {
-    const m = new ModelInfo({ name: 'decisionnode-1.0', description: 'd', release_date: '2026-10-01', max_images: 4 });
+    const m = new ModelInfo({ name: 'decisionnode-moe', description: 'd', release_date: '2026-10-01', max_images: 4 });
     expect(m.releaseDate).toBe('2026-10-01');
     expect(m.limits).toEqual({ max_images: 4 });
   });

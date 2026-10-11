@@ -60,7 +60,7 @@ function fakeApi(handlers: Record<string, (call: Call, n: number) => { status: n
   return { fetch, calls };
 }
 
-const DECISION = { status: 200, body: { model: 'decisionnode-1.0', answers: { q: { type: 'truth', truth: 0.5 } }, usage: {} } };
+const DECISION = { status: 200, body: { model: 'decisionnode-moe-0.9.0-rc1', answers: { q: { type: 'truth', truth: 0.5 } }, usage: {} } };
 
 function presign(expiresAt = new Date(Date.now() + 3600_000).toISOString().replace(/\.\d+Z$/, 'Z')) {
   let n = 0;
@@ -331,7 +331,7 @@ describe('batches', () => {
     const api = fakeApi({ 'POST /v1/batches': () => ({ status: 201, body: BATCH }) });
     await client(api.fetch).batches.create([{ customId: 'a', questions: { q: truth('?') } }]);
     expect(api.calls[0]!.headers['content-type']).toBe('application/x-ndjson');
-    expect(api.calls[0]!.body).toBe('{"custom_id":"a","model":"decisionnode-latest","state":"","questions":{"q":{"type":"truth","instructions":"?"}}}\n');
+    expect(api.calls[0]!.body).toBe('{"custom_id":"a","model":"decisionnode-moe","state":"","questions":{"q":{"type":"truth","instructions":"?"}}}\n');
   });
 
   it('polls at the interval, takes a longer Retry-After, and raises TimeoutError past the timeout', async () => {
@@ -369,13 +369,13 @@ describe('checks without sending', () => {
   });
 
   it('applies limits held from models() to a model named by its alias or version', async () => {
-    const entry = { name: 'decisionnode-1.0', version: 'decisionnode-1.0', alias: 'decisionnode-latest', sessions: { max_window: 16 }, number_max_grid_values: 0 };
+    const entry = { name: 'decisionnode-moe-0.9.0-rc1', version: 'decisionnode-moe-0.9.0-rc1', alias: 'decisionnode-moe', sessions: { max_window: 16 }, number_max_grid_values: 0 };
     const api = fakeApi({ 'GET /v1/models': () => ({ status: 200, body: { models: [entry] } }) });
     const dn = client(api.fetch);
-    await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 17, model: 'decisionnode-latest' })).resolves.toBeUndefined();
+    await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 17, model: 'decisionnode-moe' })).resolves.toBeUndefined();
     await dn.models();
-    await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 17, model: 'decisionnode-latest' })).rejects.toBeInstanceOf(ValidationError);
-    await expect(dn.checkRequest('decide', { questions: { n: number('How many?') }, model: 'decisionnode-latest' })).rejects.toThrow(
+    await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 17, model: 'decisionnode-moe' })).rejects.toBeInstanceOf(ValidationError);
+    await expect(dn.checkRequest('decide', { questions: { n: number('How many?') }, model: 'decisionnode-moe' })).rejects.toThrow(
       'does not answer number questions',
     );
     await expect(dn.checkRequest('openSession', { questions: { a: truth('?') }, window: 17, model: 'decisionnode-other' })).resolves.toBeUndefined();

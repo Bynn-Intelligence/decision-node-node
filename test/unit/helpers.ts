@@ -48,10 +48,10 @@ export function fakeFetch(replies: Reply[]): { fetch: FetchLike; calls: Recorded
 
 export const OK_TRUTH = {
   status: 200,
-  body: { model: 'decisionnode-1.0', answers: { q: { type: 'truth', truth: 0.94 } }, usage: { input_tokens: 9, output_tokens: 0 } },
+  body: { model: 'decisionnode-moe-0.9.0-rc1', answers: { q: { type: 'truth', truth: 0.94 } }, usage: { input_tokens: 9, output_tokens: 0 } },
   headers: {
     'x-request-id': 'req_1',
-    'x-decisionnode-model': 'decisionnode-1.0',
+    'x-decisionnode-model': 'decisionnode-moe-0.9.0-rc1',
     'x-decisionnode-latency-ms': '23',
     'x-decisionnode-safety': 'harm=0.031, self_harm=0.004',
   },

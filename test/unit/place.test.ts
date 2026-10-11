@@ -22,7 +22,7 @@ const DAMAGE = 'Draw a box around the damaged package.';
 const POINT = { type: 'point', x: 812, y: 455, present: 0.97, confidence: 0.91, image: 'belt', width: 1920, height: 1080 };
 const BOX = { type: 'box', x1: 300, y1: 120, x2: 520, y2: 410, present: 0.95, confidence: 0.88, image: 'belt', width: 1920, height: 1080 };
 
-function client(replies: Reply[] = [{ status: 200, body: { model: 'decisionnode-1.0', answers: {} } }]) {
+function client(replies: Reply[] = [{ status: 200, body: { model: 'decisionnode-moe-0.9.0-rc1', answers: {} } }]) {
   const f = fakeFetch(replies);
   const dn = new DecisionNode({ apiKey: 'k', baseUrl: 'https://api.example.test', fetch: f.fetch, fetchHonoursManualRedirect: true });
   return { dn, calls: f.calls };
@@ -46,7 +46,7 @@ describe('point and box', () => {
 
   it('reads typed answers', async () => {
     const { dn, calls } = client([
-      { status: 200, body: { model: 'decisionnode-1.0', answers: { pick: POINT, damage: BOX, any: { type: 'truth', truth: 0.96 } } } },
+      { status: 200, body: { model: 'decisionnode-moe-0.9.0-rc1', answers: { pick: POINT, damage: BOX, any: { type: 'truth', truth: 0.96 } } } },
     ]);
     const d = await dn.decide({ images: [BELT], questions: { pick: point(PICK), damage: box(DAMAGE), any: truth('?') } });
     expect(d.answers.pick).toBeInstanceOf(PointAnswer);
