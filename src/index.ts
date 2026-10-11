@@ -85,6 +85,7 @@ export {
   type BoosterInput,
   type BoosterName,
   type BoosterOptions,
+  type BoosterSettings,
   type BoosterStatus,
   type EvidenceByBooster,
   type Reading,

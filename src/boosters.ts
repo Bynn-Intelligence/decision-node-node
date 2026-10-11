@@ -10,14 +10,26 @@
  * any other string is sent as given, so a booster added later works without
  * a new SDK.
  */
-export type BoosterName = 'age' | 'ai_generated' | (string & {});
+export type BoosterName = 'age' | 'ai_generated' | 'face_detection' | 'wanted_person' | 'ocr' | (string & {});
+
+/**
+ * A booster's own settings, sent as given in `options`; the API checks them.
+ * Other keys are sent as given too, for settings a later booster adds.
+ */
+export interface BoosterSettings {
+  /** `ocr`: what to read, an instruction of at most 500 characters ("the invoice total and date"). */
+  prompt?: string;
+  /** `wanted_person`: its match threshold. */
+  threshold?: number;
+  [setting: string]: unknown;
+}
 
 /** A booster as the API takes it. */
 export interface WireBooster {
   name: string;
   images?: readonly string[];
   require?: boolean;
-  options?: Record<string, unknown>;
+  options?: BoosterSettings;
 }
 
 /** A booster's settings; each is left out of the request when not given. */
@@ -31,7 +43,7 @@ export interface BoosterOptions {
    */
   require?: boolean | null;
   /** The booster's own settings. */
-  options?: Record<string, unknown> | null;
+  options?: BoosterSettings | null;
 }
 
 /**
@@ -47,7 +59,7 @@ export class Booster {
   readonly name: BoosterName;
   readonly images: readonly string[] | undefined;
   readonly require: boolean | undefined;
-  readonly options: Record<string, unknown> | undefined;
+  readonly options: BoosterSettings | undefined;
 
   constructor(name: BoosterName, options: BoosterOptions = {}) {
     this.name = name;

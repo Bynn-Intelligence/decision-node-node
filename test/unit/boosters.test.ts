@@ -121,6 +121,32 @@ describe('the boosters option', () => {
     expect(Object.keys(sent(calls[0]!.body))).toEqual(['model', 'state', 'questions', 'videos', 'boosters']);
   });
 
+  it('sends the settings of the newer boosters as given, checking none of them', async () => {
+    const { dn, calls } = client([OK_TRUTH]);
+    const prompt = 'x'.repeat(501);
+    await dn.decide({
+      questions: { q: truth('?') },
+      boosters: ['face_detection', new Booster('ocr', { options: { prompt } }), new Booster('wanted_person', { options: { threshold: 0.8 } })],
+    });
+    expect(sent(calls[0]!.body).boosters).toEqual([
+      'face_detection',
+      { name: 'ocr', options: { prompt } },
+      { name: 'wanted_person', options: { threshold: 0.8 } },
+    ]);
+  });
+
+  it('reads the reading of a newer booster as a generic one until this version types it', () => {
+    const d = new Decision(
+      {
+        model: 'm',
+        answers: {},
+        evidence: { ocr: { version: 'ocr-v1', status: 'ok', latency_ms: 90, results: [{ image: 'a', text: 'Total 12.00' }] } },
+      },
+      {},
+    );
+    expect(d.evidence!.ocr!.results[0]).toBeInstanceOf(UnknownReading);
+  });
+
   it('checks nothing about boosters locally: the server answers', async () => {
     const { dn, calls } = client([OK_TRUTH]);
     const odd = ['age', 'age', 'nope', { name: 'x' }, 5, 'ai_generated'];
