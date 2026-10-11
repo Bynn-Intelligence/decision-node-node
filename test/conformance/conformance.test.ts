@@ -19,8 +19,11 @@ import {
   Batch,
   Booster,
   Evidence,
+  FaceDetectionReading,
   OcrReading,
   UnknownReading,
+  WantedPersonReading,
+  type FaceBox,
   type Reading,
   BoxAnswer,
   PointAnswer,
@@ -206,6 +209,10 @@ function normAnswer(a: Answer): Json {
   throw new Error(`an answer of class ${a.constructor.name}`);
 }
 
+function normBox(b: FaceBox): Json {
+  return { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 };
+}
+
 function normReading(r: Reading): Json {
   if (r instanceof AgeReading) {
     return { kind: 'age', image: r.image, faces: r.faces, age_years: r.ageYears, low: r.low, high: r.high, confidence: r.confidence };
@@ -221,6 +228,12 @@ function normReading(r: Reading): Json {
       c2pa_signer: r.c2paSigner,
       c2pa: r.c2pa,
     };
+  }
+  if (r instanceof FaceDetectionReading) {
+    return { kind: 'face_detection', image: r.image, faces: r.faces, detections: r.detections.map((d) => ({ box: normBox(d.box), confidence: d.confidence })) };
+  }
+  if (r instanceof WantedPersonReading) {
+    return { kind: 'wanted_person', image: r.image, faces: r.faces, matches: r.matches.map((m) => ({ box: normBox(m.box), score: m.score, reference: m.reference })) };
   }
   if (r instanceof OcrReading) return { kind: 'ocr', image: r.image, text: r.text, truncated: r.truncated };
   if (r instanceof UnknownReading) return { kind: 'unknown', raw: r.raw };

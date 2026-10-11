@@ -3,7 +3,7 @@
  * then the body serialised once, so a request the API would refuse is refused
  * here with nothing sent. Images are placed later, per send.
  */
-import { boostersWire } from './boosters.js';
+import { boostersWire, namesOcr } from './boosters.js';
 import { checkRequest, entry, heldNumber, type Entry, type HeldLimits } from './checks.js';
 import { RequestTooLargeError } from './errors.js';
 import { Image, MAX_IMAGES } from './image.js';
@@ -23,6 +23,8 @@ export interface Prepared {
   /** The body without `images`, as JSON text. */
   head: string;
   plan: ImagePlan | null;
+  /** Whether its boosters name `ocr`: a decision then waits longer and is never retried after a timeout. */
+  ocr: boolean;
 }
 
 /** The questions object after the argument check: a non-empty map. */
@@ -70,7 +72,7 @@ export async function prepare(
   checkVideos(wires, images);
   const head = serialise({ ...fields, ...tail });
   checkBodySize(withImages(head, plan === null ? null : await placer.project(plan)));
-  return { head, plan };
+  return { head, plan, ocr: namesOcr(boosterWire) };
 }
 
 /**

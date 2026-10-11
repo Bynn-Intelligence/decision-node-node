@@ -17,6 +17,8 @@ Implements version 1.3 of the DecisionNode SDK specification (`SPEC_VERSION` is 
 - An image id over 64 characters, counted as Unicode code points, is refused before anything is sent: `BadRequestError` `api_usage_error`, `Image <n>: its id is longer than 64 characters.`
 - Fine-tuned models: a name such as `decisionnode-moe@acme/fraud` or `...:3` is sent as given in `model`, and `Decision.model` is the pinned name that answered. `ModelInfo` gains `fineTuned`, `base`, `adapterVersion` and `status`, each `null` on a catalogue entry.
 - Batch results read some time after `results()` no longer come back empty: the client holds the response with its body until the results are read, since Node's fetch cancels the body of a response that is garbage collected first.
+- Booster readings `FaceDetectionReading` (`image`, `faces`, `detections`, each `{ box, confidence }`) and `WantedPersonReading` (`image`, `faces`, `matches`, each `{ box, score, reference }`), a box `{ x1, y1, x2, y2 }` as sent; a reading with a field missing or of the wrong type is an `UnknownReading`.
+- A decision whose boosters name `ocr` waits 30 s per attempt unless `timeout` is set, and is never retried after a timeout, since the server finishes that attempt and may bill it; its other retries stay.
 
 ## 0.2.0 (unreleased)
 

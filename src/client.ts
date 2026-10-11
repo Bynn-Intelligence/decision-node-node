@@ -48,6 +48,8 @@ export const DEFAULT_BASE_URL = 'https://api.decisionnode.com';
 export const DEFAULT_MODEL = 'decisionnode-moe';
 /** Milliseconds per attempt. */
 export const DEFAULT_TIMEOUT = 10_000;
+/** Milliseconds per attempt for a decision whose boosters name `ocr`, when the caller set no timeout. */
+const OCR_TIMEOUT = 30_000;
 export const DEFAULT_MAX_RETRIES = 2;
 export const DEFAULT_CONCURRENCY = 8;
 
@@ -67,7 +69,8 @@ export interface ClientOptions {
   model?: string | null;
   /**
    * Milliseconds per attempt, from sending the request to the last byte of the
-   * body. Above 0. Default 10000.
+   * body. Above 0. Default 10000, and 30000 for a decision whose boosters name
+   * `ocr`; a timeout set here is used as given for every call.
    */
   timeout?: number;
   /** Retries after the first attempt, a whole number 0 or more. Default 2. */
@@ -303,6 +306,8 @@ export class DecisionNode {
   readonly batches: Batches;
   readonly #transport: Transport;
   readonly #placer: ImagePlacer;
+  /** Whether the caller set `timeout`: a set timeout is used as given, also for a decision naming `ocr`. */
+  readonly #timeoutGiven: boolean;
   /** Each model's `/v1/models` entry, once `models()` has been called: limits only that list states. */
   #held = new Map<string, Record<string, unknown>>();
 
@@ -311,6 +316,7 @@ export class DecisionNode {
     const apiKey = options.apiKey || readEnv('DECISIONNODE_API_KEY');
     this.baseUrl = checkBaseUrl(options.baseUrl || readEnv('DECISIONNODE_BASE_URL') || DEFAULT_BASE_URL);
     this.model = options.model || readEnv('DECISIONNODE_MODEL') || DEFAULT_MODEL;
+    this.#timeoutGiven = options.timeout !== undefined && options.timeout !== null;
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
     if (typeof timeout !== 'number' || !(timeout > 0)) {
       throw new RangeError(`timeout must be above 0 milliseconds, got ${String(timeout)}`);
@@ -418,7 +424,9 @@ export class DecisionNode {
         placed = p.placed;
       }
       try {
-        const res = await this.#transport.request({ method: 'POST', path, body: payload, signal });
+        // A decision naming ocr waits longer by default, and is never retried after a timeout.
+        const ocr = prepared.ocr ? { policy: 'ocr' as const, timeout: this.#timeoutGiven ? undefined : OCR_TIMEOUT } : {};
+        const res = await this.#transport.request({ method: 'POST', path, body: payload, signal, ...ocr });
         return { decision: new Decision<A>(this.#transport.parseObject(res), res.headers), res };
       } catch (err) {
         if (

@@ -209,6 +209,9 @@ A booster is a specialist model that reads the request's images before the decis
 |---|---|---|
 | `age` | A picture of a person | How old the person is, with a range and a confidence (the largest face is read) |
 | `ai_generated` | Any picture | How likely the picture was made by an image generator, which generator most likely, and whether the file carries Content Credentials (C2PA) and who signed them |
+| `face_detection` | Any picture | How many faces it shows and where: a box and a confidence per face. A picture with no face reads 0 faces |
+| `wanted_person` | A picture of a person | Whether a face matches an entry of a wanted-persons list: per matching face a box, a match score and the entry's reference id, never a name or any personal detail. Off by default; enabled for a workspace on request |
+| `ocr` | Any picture | The text it shows, in reading order, or, with a `prompt` option, what that instruction asks it to read ("the invoice total and date") |
 
 ```ts
 import { AgeReading, Image, truth } from '@bynn/decisionnode';
@@ -257,7 +260,7 @@ await dn.decide({
 |---|---|
 | `images` | The ids of the request's images the booster reads. Left out: every image |
 | `require` | `true`: a booster that fails or does not answer in time fails the request (see the errors below). Left out or `false`: the decision runs without that reading, and `evidence` says why |
-| `options` | The booster's own settings; neither of today's boosters has any |
+| `options` | The booster's own settings: `ocr` takes `prompt` (at most 2,000 characters: a task, an instruction or a JSON schema) and `wanted_person` takes `threshold` (a number from 0 to 1; matches below it are not sent). The API checks them, not this package; `age`, `ai_generated` and `face_detection` take none |
 
 Boosters read images in every form (URL, inline or uploaded), and every question sees every reading. Which boosters exist and which your workspace may use is the API's to say, so nothing about `boosters` is checked before sending, and a name the API adds later works with this version. `decide`, the helpers, `decideMany` and batch requests take `boosters`; sessions do not. Without boosters (left out or an empty list) the request carries no `boosters` field.
 
@@ -276,7 +279,14 @@ Boosters read images in every form (URL, inline or uploaded), and every question
 |---|---|
 | `AgeReading` | `image`, `faces` (how many faces were found; the largest is read), and `ageYears`, `low`, `high` (the range) and `confidence`, each `null` when `faces` is 0 |
 | `AiGeneratedReading` | `image`, `generated` (the probability that a generator made the picture), `confidence`, `method` (`inference`: read from the pixels; `c2pa`: the file's trusted Content Credentials declare it generated or edited by AI), `topGenerator` (`name` and `probability` of the likeliest generator when the reading says likely generated; `null` otherwise, and always on a `c2pa` reading), `c2paSigner` (who signed the file's Content Credentials when they are trusted, else `null`), `c2pa` (`untrusted` when the file carries Content Credentials that validate but are not trusted, which change nothing in the reading; else `null`) |
+| `FaceDetectionReading` | `image`, `faces` (how many faces the picture shows) and `detections` (at most 64, by confidence: each `{ box, confidence }`). `faces` can exceed the list |
+| `WantedPersonReading` | `image`, `faces` (the faces checked against the list) and `matches` (by score, empty when none matches: each `{ box, score, reference }`, `reference` the list entry's opaque id) |
+| `OcrReading` | `image`, `text` (the text read, or the answer to the `prompt`; empty when the picture shows none, which is a reading, not a failure) and `truncated` (`true` when the reading was cut at the model's context limit) |
 | `UnknownReading` | `image` and `raw`: a reading of a booster this version does not know, or one with a field missing or of the wrong type. The decision does not fail |
+
+A face's `box` is `{ x1, y1, x2, y2 }`, its corners as in "Points and boxes": pixels of the image as sent, or fractions when every place question of the request asks for `units: 'normalized'`. The numbers are as sent, never converted.
+
+`ocr` reads with a generative model and can take several seconds a picture, so a decision naming it waits 30 s per attempt by default instead of 10 s. A `timeout` you set on the client is used as given, even below 30 s. Such a decision is never retried after a timeout, because the server finishes the timed-out attempt and may bill it: set a timeout of at least 30 s for requests that name `ocr`. Its other retries (408, 429, 5xx, a lost connection) stay.
 
 Each reading also has `raw`. Numbers are passed through as received. `usage.boosterTokens` (the readings' share of `inputTokens`) and `usage.boosters` (the booster calls billed) are `null` for a request without boosters.
 
@@ -576,7 +586,7 @@ try {
 
 ### Retries and timeouts
 
-Each attempt times out after 10 seconds, counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors. The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404, 413 and 422 are never retried. A decision changes nothing on the server, so a retry is always safe.
+Each attempt times out after 10 seconds (30 seconds for a decision that names the `ocr` booster, unless you set `timeout`), counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors, except that a decision naming `ocr` is never retried after a timeout (see Boosters). The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404, 413 and 422 are never retried. A decision changes nothing on the server, so a retry is otherwise safe.
 
 Each storage PUT of an upload has its own timeout, `uploadTimeout` (60 seconds by default), apart from `timeout`, since a large image on a slow uplink needs longer than a decision. It is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. A `403` after the upload URL's 5 minutes have passed, by the client's clock, gets a fresh URL once; a second such `403` is thrown. Batch results stream in, and each read of the stream must bring data within the timeout.
 

@@ -31,8 +31,11 @@ export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
  * - `mutation`: only 429 and 529, where the API applied nothing; never after a
  *   timeout, a lost answer or another 5xx, since a repeat could apply twice.
  * - `session_open`: as `default`, except a 429 `session_limit_exceeded`.
+ * - `ocr`: as `default`, except a timeout: a decision whose boosters name
+ *   `ocr` is never retried after one, since the server finishes the timed-out
+ *   attempt and may bill it.
  */
-export type RetryPolicy = 'default' | 'mutation' | 'session_open';
+export type RetryPolicy = 'default' | 'mutation' | 'session_open' | 'ocr';
 
 export interface RawResponse {
   /** True when the answer was a redirect the client did not follow, or one the fetch implementation followed anyway. */
@@ -59,6 +62,8 @@ export interface RequestSpec {
   signal?: AbortSignal;
   /** Return a successful body unread, as `stream`. */
   stream?: boolean;
+  /** Milliseconds for each attempt of this request, in place of the client's. */
+  timeout?: number;
 }
 
 export interface TransportOptions {
@@ -292,11 +297,11 @@ export class Transport {
       const started = nowMs();
       let res: RawResponse;
       try {
-        res = await this.send(method, this.baseUrl + path, headers, body, signal, spec.stream === true);
+        res = await this.send(method, this.baseUrl + path, headers, body, signal, spec.stream === true, spec.timeout ?? this.timeout);
       } catch (err) {
         if (!(err instanceof ConnectionError || err instanceof TimeoutError)) throw err;
         this.#log(method, path, err.name, null, started, attempt);
-        if (policy === 'mutation' || attempt >= this.maxRetries) throw err;
+        if (policy === 'mutation' || (policy === 'ocr' && err instanceof TimeoutError) || attempt >= this.maxRetries) throw err;
         await this.sleep(backoffSeconds(attempt) * 1000, signal);
         continue;
       }

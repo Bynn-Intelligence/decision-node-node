@@ -100,6 +100,12 @@ export function boostersWire(boosters: unknown): unknown {
   return boosters instanceof Booster ? boosters.toJSON() : boosters;
 }
 
+/** Whether a `boosters` field as sent names `ocr`, by its bare name or in the object form. */
+export function namesOcr(wire: unknown): boolean {
+  if (!Array.isArray(wire)) return false;
+  return wire.some((b: unknown) => b === 'ocr' || (isObject(b) && b.name === 'ocr'));
+}
+
 // ---------------------------------------------------------------- readings
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -225,6 +231,108 @@ export class AiGeneratedReading {
 }
 
 /**
+ * A face's box: its corners, in pixels of the image as sent (integers), or as
+ * fractions when every place question of the request asks for normalized
+ * units. The numbers are as sent, never converted.
+ */
+export interface FaceBox {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** One face a `face_detection` reading found. */
+export interface FaceDetection {
+  box: FaceBox;
+  /** 0 to 1. */
+  confidence: number;
+}
+
+/** One face a `wanted_person` reading matched against the list. */
+export interface WantedMatch {
+  box: FaceBox;
+  /** The match score, 0 to 1. */
+  score: number;
+  /** The list entry's reference id: an opaque id, never a name or any personal detail. */
+  reference: string;
+}
+
+function isFaceBox(v: unknown): v is FaceBox {
+  return isObject(v) && isNumber(v.x1) && isNumber(v.y1) && isNumber(v.x2) && isNumber(v.y2);
+}
+
+function faceBox(v: Record<string, unknown>): FaceBox {
+  return { x1: v.x1 as number, y1: v.y1 as number, x2: v.x2 as number, y2: v.y2 as number };
+}
+
+function isFaceCount(v: unknown): v is number {
+  return isInteger(v) && v >= 0;
+}
+
+/**
+ * A `face_detection` reading of one image: how many faces it shows and where.
+ * `faces` can exceed `detections`, which holds at most 64; a picture with no
+ * face is `faces` 0 with no detections, a reading, not a failure.
+ */
+export class FaceDetectionReading {
+  /** The id of the image read. */
+  readonly image: string;
+  /** How many faces the picture shows. */
+  readonly faces: number;
+  /** The faces found, by confidence, in the order sent. */
+  readonly detections: FaceDetection[];
+  /** The reading as received. */
+  readonly raw: Record<string, unknown>;
+
+  constructor(raw: Record<string, unknown>) {
+    this.raw = raw;
+    this.image = raw.image as string;
+    this.faces = raw.faces as number;
+    this.detections = (raw.detections as Record<string, unknown>[]).map((d) => ({
+      box: faceBox(d.box as Record<string, unknown>),
+      confidence: d.confidence as number,
+    }));
+  }
+
+  static wellFormed(r: Record<string, unknown>): boolean {
+    if (typeof r.image !== 'string' || !isFaceCount(r.faces) || !Array.isArray(r.detections)) return false;
+    return r.detections.every((d: unknown) => isObject(d) && isFaceBox(d.box) && isNumber(d.confidence));
+  }
+}
+
+/**
+ * A `wanted_person` reading of one image: the faces checked against the list
+ * and the ones that match it, each by its box, score and the entry's reference.
+ */
+export class WantedPersonReading {
+  /** The id of the image read. */
+  readonly image: string;
+  /** How many faces were checked against the list. */
+  readonly faces: number;
+  /** The faces that match, by score, in the order sent; empty when none does. */
+  readonly matches: WantedMatch[];
+  /** The reading as received. */
+  readonly raw: Record<string, unknown>;
+
+  constructor(raw: Record<string, unknown>) {
+    this.raw = raw;
+    this.image = raw.image as string;
+    this.faces = raw.faces as number;
+    this.matches = (raw.matches as Record<string, unknown>[]).map((m) => ({
+      box: faceBox(m.box as Record<string, unknown>),
+      score: m.score as number,
+      reference: m.reference as string,
+    }));
+  }
+
+  static wellFormed(r: Record<string, unknown>): boolean {
+    if (typeof r.image !== 'string' || !isFaceCount(r.faces) || !Array.isArray(r.matches)) return false;
+    return r.matches.every((m: unknown) => isObject(m) && isFaceBox(m.box) && isNumber(m.score) && typeof m.reference === 'string');
+  }
+}
+
+/**
  * An `ocr` reading of one image: the text the picture shows, in reading
  * order, or the answer to the booster's `prompt` option.
  */
@@ -268,13 +376,15 @@ export class UnknownReading {
 }
 
 /** One reading of one image. */
-export type Reading = AgeReading | AiGeneratedReading | OcrReading | UnknownReading;
+export type Reading = AgeReading | AiGeneratedReading | FaceDetectionReading | WantedPersonReading | OcrReading | UnknownReading;
 
 /** Parses one reading by the booster that made it. */
 export function parseReading(booster: string, raw: unknown): Reading {
   if (isObject(raw)) {
     if (booster === 'age' && AgeReading.wellFormed(raw)) return new AgeReading(raw);
     if (booster === 'ai_generated' && AiGeneratedReading.wellFormed(raw)) return new AiGeneratedReading(raw);
+    if (booster === 'face_detection' && FaceDetectionReading.wellFormed(raw)) return new FaceDetectionReading(raw);
+    if (booster === 'wanted_person' && WantedPersonReading.wellFormed(raw)) return new WantedPersonReading(raw);
     if (booster === 'ocr' && OcrReading.wellFormed(raw)) return new OcrReading(raw);
   }
   return new UnknownReading(raw);
@@ -317,6 +427,8 @@ export class Evidence<R extends Reading = Reading> {
 export interface EvidenceByBooster {
   age?: Evidence<AgeReading | UnknownReading>;
   ai_generated?: Evidence<AiGeneratedReading | UnknownReading>;
+  face_detection?: Evidence<FaceDetectionReading | UnknownReading>;
+  wanted_person?: Evidence<WantedPersonReading | UnknownReading>;
   ocr?: Evidence<OcrReading | UnknownReading>;
   [booster: string]: Evidence | undefined;
 }

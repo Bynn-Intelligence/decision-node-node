@@ -80,8 +80,10 @@ export {
   AiGeneratedReading,
   Booster,
   Evidence,
+  FaceDetectionReading,
   OcrReading,
   UnknownReading,
+  WantedPersonReading,
   parseBoostersHeader,
   type BoosterInput,
   type BoosterName,
@@ -89,8 +91,11 @@ export {
   type BoosterSettings,
   type BoosterStatus,
   type EvidenceByBooster,
+  type FaceBox,
+  type FaceDetection,
   type Reading,
   type TopGenerator,
+  type WantedMatch,
   type WireBooster,
 } from './boosters.js';
 export {
