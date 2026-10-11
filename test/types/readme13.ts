@@ -9,6 +9,7 @@ import {
   UnknownReading,
   truth,
   type BoosterStatus,
+  type Cost,
   type Fallback,
   type ModelInfo,
 } from '../../src/index.js';
@@ -45,6 +46,8 @@ export async function readme13() {
   }
   const tokens: number | null = d.usage.boosterTokens;
   const calls: number | null = d.usage.boosters;
+  const cost: Cost | null = d.usage.cost;
+  const usd: number | null | undefined = cost?.usd;
 
   // A booster that needs a setting; names this version does not know and
   // wire-form objects are sent as given.
@@ -78,5 +81,5 @@ export async function readme13() {
     void [served, requested];
   }
   await dn.decide({ model: 'decisionnode-moe', questions: { q: truth('?') }, fallback: false });
-  return [adult, tokens, calls, pinned, fineTuned];
+  return [adult, tokens, calls, usd, pinned, fineTuned];
 }

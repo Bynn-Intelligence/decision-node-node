@@ -280,10 +280,39 @@ export interface Usage {
   boosterTokens: number | null;
   /** For a request that named boosters: the booster calls billed; `null` otherwise. */
   boosters: number | null;
+  /** What the answer cost, as the server sent it; `null` when it sent none. */
+  cost: Cost | null;
+}
+
+/**
+ * What one answer cost, in USD, read as sent. `usd` is the server's total:
+ * never `modelUsd` plus `boostersUsd` computed here, which floating point
+ * would not always give back.
+ */
+export interface Cost {
+  /** What the answer cost in all. */
+  usd: number | null;
+  /** The model's part. */
+  modelUsd: number | null;
+  /** The boosters' part. */
+  boostersUsd: number | null;
+  /** Whether the answer was covered by the free tier. */
+  freeTier: boolean | null;
 }
 
 function count(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function parseCost(value: unknown): Cost | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const c = value as Record<string, unknown>;
+  return {
+    usd: count(c.usd),
+    modelUsd: count(c.model_usd),
+    boostersUsd: count(c.boosters_usd),
+    freeTier: typeof c.free_tier === 'boolean' ? c.free_tier : null,
+  };
 }
 
 /**
@@ -344,6 +373,7 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
       videoSeconds: count(usage.video_seconds),
       boosterTokens: count(usage.booster_tokens),
       boosters: count(usage.boosters),
+      cost: parseCost(usage.cost),
     };
     this.evidence = parseEvidence(body.evidence);
     this.warnings = Array.isArray(body.warnings) ? body.warnings.filter((w): w is string => typeof w === 'string') : [];

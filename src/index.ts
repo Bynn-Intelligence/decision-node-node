@@ -58,6 +58,7 @@ export {
   type DecisionResult,
   type Fallback,
   type ModelSessions,
+  type Cost,
   type Usage,
 } from './answers.js';
 export {

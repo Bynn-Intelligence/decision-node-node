@@ -58,7 +58,7 @@ export class Reply {
   readonly answers: Record<string, Answer>;
   /** The `seq` of each frame this one superseded, as received; `null` when none. */
   readonly dropped: number[] | null;
-  /** `input_tokens` and `output_tokens` as sent. */
+  /** `input_tokens`, `output_tokens` and `cost` (what the frame cost, in USD) as sent. */
   readonly usage: Record<string, unknown> | null;
   /** The worker's time for this frame. */
   readonly latencyMs: number | null;
@@ -85,7 +85,7 @@ export class FrameError {
   readonly category: string | null;
   /** How long to wait before the next frame, on `rate_limit_error` and `overloaded_error`. */
   readonly retryAfterMs: number | null;
-  /** What a refused frame billed. */
+  /** What a refused frame billed, with its `cost`, as sent. */
   readonly usage: Record<string, unknown> | null;
   readonly safety: SafetyBody | null;
   readonly raw: Record<string, unknown>;
@@ -234,6 +234,7 @@ export class Session {
   /** The question ids, in order: the names a frame's `questions` list uses. */
   readonly questions: string[];
   readonly prefixTokens: number | null;
+  /** What the open billed, with its `cost` (in USD), as sent. */
   readonly usage: Record<string, unknown> | null;
   /** Every question answered on the fixed part, before any frame. */
   readonly answers: Record<string, Answer>;

@@ -63,7 +63,7 @@ const SUITE = resolve(SUITE_DIR);
 const PYTHON = process.env.PYTHON ?? 'python3';
 const KINDS = ['requests', 'responses', 'errors', 'behaviour', 'constants'] as const;
 const ENV_VARS = ['DECISIONNODE_API_KEY', 'DECISIONNODE_BASE_URL', 'DECISIONNODE_MODEL'];
-const EXACT = new Set(['probabilities', 'legend', 'raw', 'entries', 'safety', 'body', 'limits', 'evidence', 'boosters', 'fallback']);
+const EXACT = new Set(['probabilities', 'legend', 'raw', 'entries', 'safety', 'body', 'limits', 'evidence', 'boosters', 'fallback', 'cost']);
 // Compared whole and in their key order too: evidence in the request's order, an
 // error's boosters in the header's.
 const ORDERED = new Set(['evidence', 'boosters']);
@@ -255,6 +255,10 @@ function normDecision(d: Decision): Json {
       video_seconds: d.usage.videoSeconds,
       booster_tokens: d.usage.boosterTokens,
       boosters: d.usage.boosters,
+      cost:
+        d.usage.cost === null
+          ? null
+          : { usd: d.usage.cost.usd, model_usd: d.usage.cost.modelUsd, boosters_usd: d.usage.cost.boostersUsd, free_tier: d.usage.cost.freeTier },
     },
     evidence: normEvidence(d.evidence),
     fallback: d.fallback === null ? null : { served_model: d.fallback.servedModel, requested_model: d.fallback.requestedModel },

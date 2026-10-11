@@ -124,6 +124,7 @@ describe('answers', () => {
       videoSeconds: null,
       boosterTokens: null,
       boosters: null,
+      cost: null,
     });
     expect(d.warnings).toEqual([]);
     expect(d.safety).toEqual({ checked: true, harm: 0.2, selfHarm: 0.1, flagged: [] });
@@ -137,6 +138,7 @@ describe('answers', () => {
       videoSeconds: null,
       boosterTokens: null,
       boosters: null,
+      cost: null,
     });
     expect(new Decision({ model: 'm', answers: {}, usage: { input_tokens: 9 } }, {}).usage).toEqual({
       inputTokens: 9,
@@ -145,6 +147,7 @@ describe('answers', () => {
       videoSeconds: null,
       boosterTokens: null,
       boosters: null,
+      cost: null,
     });
     expect(new Decision({ model: 'm', answers: {} }, {}).latencyMs).toBeNull();
   });
