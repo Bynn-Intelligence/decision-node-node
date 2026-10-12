@@ -10,7 +10,7 @@ permissions:
 env:
   # The conformance suite commit this SDK targets (suite 1.12). Moving to a newer
   # suite is a reviewed change to this one line.
-  CONFORMANCE_REF: b181c624d7a4efd1d963a4b16088f09a0514372f
+  CONFORMANCE_REF: 5f996eabc796c15d97655169dff7c8082e8a5d48
 
 jobs:
   test:
