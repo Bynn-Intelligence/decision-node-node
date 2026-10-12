@@ -1,0 +1,78 @@
+# Runs only while the repository is public: nothing is bumped, tagged or published while it is private.
+#
+# Auto-release @bynn/decisionnode on every push to main: bump the patch, keep
+# the in-code version string (src/version.ts) in step, run the checks,
+# publish to npm with provenance, push the bump commit and tag back to main,
+# and cut the GitHub release. The push back uses the default GITHUB_TOKEN,
+# which does not retrigger this workflow, and the bump commit carries
+# [skip publish] as a second guard.
+#
+# To ship without cutting a release (docs, CI tweaks), put [skip publish] in
+# the commit message.
+#
+# Publishes via npm OIDC trusted publishing bound to the npm-publish
+# environment: no NPM_TOKEN, no stored credential. Requires npm >= 11.5 (the
+# workflow upgrades to latest) and this repo + workflow + environment
+# registered as a trusted publisher on npmjs.com.
+name: Publish to npm
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions: read-all
+
+jobs:
+  publish:
+    if: "github.event.repository.visibility == 'public' && !contains(github.event.head_commit.message, '[skip publish]')"
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm install -g npm@latest
+      - run: npm ci
+
+      - id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          CURRENT=$(node -p "require('./package.json').version")
+          NEW=$(npm version patch --no-git-tag-version)
+          NEW=${NEW#v}
+          sed -i "s/export const VERSION = '${CURRENT}'/export const VERSION = '${NEW}'/" src/version.ts
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - run: |
+          git add package.json package-lock.json src/version.ts
+          git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main "v${{ steps.bump.outputs.version }}"
+
+      # OIDC trusted publishing: npm (>= 11.5) exchanges the workflow id-token
+      # for a short-lived, scoped credential, so no NPM_TOKEN is stored. The
+      # same step mints the Sigstore provenance shown on npmjs.com.
+      - run: npm publish --provenance --access public
+
+      - run: gh release create "v${{ steps.bump.outputs.version }}" --title "v${{ steps.bump.outputs.version }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
