@@ -7,7 +7,7 @@ import {
   FaceDetectionReading,
   TimeoutError,
   UnknownReading,
-  WantedPersonReading,
+  FaceRecognitionReading,
   truth,
 } from '../../src/index.js';
 import { OK_TRUTH, fakeFetch, type Reply } from './helpers.js';
@@ -71,29 +71,49 @@ describe('face_detection readings', () => {
   });
 });
 
-describe('wanted_person readings', () => {
-  it('reads the faces checked and each match', () => {
-    const d = evidence('wanted_person', [
-      { image: 'gate', faces: 3, matches: [{ box: { x1: 5, y1: 6, x2: 50, y2: 60 }, score: 0.91, reference: 'ref_01.a:b-c' }] },
+describe('face_recognition readings', () => {
+  it('reads the faces searched and each match, name and label empty when absent', () => {
+    const box = { x1: 5, y1: 6, x2: 50, y2: 60 };
+    const d = evidence('face_recognition', [
+      {
+        image: 'gate',
+        faces: 3,
+        matches: [
+          { box, score: 0.91, collection: 'col_1', reference: 'emp-1042', label: 'Reception' },
+          { box, score: 0.88, collection: 'celebrities', reference: 'cel-7', name: 'Example Person' },
+        ],
+      },
       { image: 'lobby', faces: 2, matches: [] },
     ]);
-    const [gate, lobby] = d.evidence!.wanted_person!.results as WantedPersonReading[];
-    expect(gate).toBeInstanceOf(WantedPersonReading);
-    expect([gate!.faces, gate!.matches]).toEqual([3, [{ box: { x1: 5, y1: 6, x2: 50, y2: 60 }, score: 0.91, reference: 'ref_01.a:b-c' }]]);
+    const [gate, lobby] = d.evidence!.face_recognition!.results as FaceRecognitionReading[];
+    expect(gate).toBeInstanceOf(FaceRecognitionReading);
+    expect([gate!.faces, gate!.matches]).toEqual([
+      3,
+      [
+        { box, score: 0.91, collection: 'col_1', reference: 'emp-1042', name: null, label: 'Reception' },
+        { box, score: 0.88, collection: 'celebrities', reference: 'cel-7', name: 'Example Person', label: null },
+      ],
+    ]);
     expect([lobby!.faces, lobby!.matches]).toEqual([2, []]);
   });
 
   it('reads a malformed reading as generic', () => {
     const box = { x1: 1, y1: 2, x2: 3, y2: 4 };
-    const d = evidence('wanted_person', [
+    const m = { box, score: 0.9, collection: 'col_1', reference: 'emp-1' };
+    const d = evidence('face_recognition', [
       { image: 'a', faces: 1 },
-      { image: 'b', faces: 1, matches: [{ box, score: 0.9 }] },
-      { image: 'c', faces: 1, matches: [{ box, score: 0.9, reference: 7 }] },
-      { image: 'd', faces: 1, matches: [{ box, score: true, reference: 'r' }] },
-      { image: 'e', faces: 1, matches: [{ box: 'x', score: 0.9, reference: 'r' }] },
-      { image: 'f', faces: '1', matches: [] },
+      { image: 'b', matches: [m] },
+      { image: 'c', faces: 1, matches: [{ box, score: 0.9, reference: 'emp-1' }] },
+      { image: 'd', faces: 1, matches: [{ box, score: 0.9, collection: 'col_1' }] },
+      { image: 'e', faces: 1, matches: [{ ...m, reference: 1042 }] },
+      { image: 'f', faces: 1, matches: [{ ...m, collection: 7 }] },
+      { image: 'g', faces: 1, matches: [{ ...m, name: 7 }] },
+      { image: 'h', faces: 1, matches: [{ ...m, label: false }] },
+      { image: 'i', faces: 1, matches: [{ ...m, score: true }] },
+      { image: 'j', faces: 1, matches: [{ ...m, box: 'x' }] },
+      { image: 'k', faces: '1', matches: [] },
     ]);
-    expect(d.evidence!.wanted_person!.results.every((r) => r instanceof UnknownReading)).toBe(true);
+    expect(d.evidence!.face_recognition!.results.every((r) => r instanceof UnknownReading)).toBe(true);
   });
 });
 

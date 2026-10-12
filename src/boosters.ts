@@ -10,7 +10,7 @@
  * any other string is sent as given, so a booster added later works without
  * a new SDK.
  */
-export type BoosterName = 'age' | 'ai_generated' | 'face_detection' | 'wanted_person' | 'ocr' | (string & {});
+export type BoosterName = 'age' | 'ai_generated' | 'face_detection' | 'face_recognition' | 'ocr' | (string & {});
 
 /**
  * A booster's own settings, sent as given in `options`; the API checks them.
@@ -19,7 +19,9 @@ export type BoosterName = 'age' | 'ai_generated' | 'face_detection' | 'wanted_pe
 export interface BoosterSettings {
   /** `ocr`: what to read, at most 2,000 characters: a task, an instruction ("the invoice total and date") or a JSON schema. */
   prompt?: string;
-  /** `wanted_person`: its match threshold. */
+  /** `face_recognition`: the collection to search, its id or a public collection's name. */
+  collection?: string;
+  /** `face_recognition`: the lowest match score it lists. */
   threshold?: number;
   [setting: string]: unknown;
 }
@@ -249,13 +251,19 @@ export interface FaceDetection {
   confidence: number;
 }
 
-/** One face a `wanted_person` reading matched against the list. */
-export interface WantedMatch {
+/** One face a `face_recognition` reading matched in a collection. */
+export interface FaceMatch {
   box: FaceBox;
   /** The match score, 0 to 1. */
   score: number;
-  /** The list entry's reference id: an opaque id, never a name or any personal detail. */
+  /** The collection searched. */
+  collection: string;
+  /** The matched item's reference. */
   reference: string;
+  /** A public figure's name, for a public collection that names its items; `null` otherwise. */
+  name: string | null;
+  /** The matched item's label, when it has one; `null` otherwise. */
+  label: string | null;
 }
 
 function isFaceBox(v: unknown): v is FaceBox {
@@ -302,16 +310,17 @@ export class FaceDetectionReading {
 }
 
 /**
- * A `wanted_person` reading of one image: the faces checked against the list
- * and the ones that match it, each by its box, score and the entry's reference.
+ * A `face_recognition` reading of one image: the faces searched in the
+ * collection and the ones that match an item of it, each by its box, score,
+ * the collection, the item's reference, and its name or label when there is one.
  */
-export class WantedPersonReading {
+export class FaceRecognitionReading {
   /** The id of the image read. */
   readonly image: string;
-  /** How many faces were checked against the list. */
+  /** How many faces were searched. */
   readonly faces: number;
   /** The faces that match, by score, in the order sent; empty when none does. */
-  readonly matches: WantedMatch[];
+  readonly matches: FaceMatch[];
   /** The reading as received. */
   readonly raw: Record<string, unknown>;
 
@@ -322,13 +331,26 @@ export class WantedPersonReading {
     this.matches = (raw.matches as Record<string, unknown>[]).map((m) => ({
       box: faceBox(m.box as Record<string, unknown>),
       score: m.score as number,
+      collection: m.collection as string,
       reference: m.reference as string,
+      name: (m.name ?? null) as string | null,
+      label: (m.label ?? null) as string | null,
     }));
   }
 
   static wellFormed(r: Record<string, unknown>): boolean {
     if (typeof r.image !== 'string' || !isFaceCount(r.faces) || !Array.isArray(r.matches)) return false;
-    return r.matches.every((m: unknown) => isObject(m) && isFaceBox(m.box) && isNumber(m.score) && typeof m.reference === 'string');
+    const optionalString = (v: unknown) => absent(v) || typeof v === 'string';
+    return r.matches.every(
+      (m: unknown) =>
+        isObject(m) &&
+        isFaceBox(m.box) &&
+        isNumber(m.score) &&
+        typeof m.collection === 'string' &&
+        typeof m.reference === 'string' &&
+        optionalString(m.name) &&
+        optionalString(m.label),
+    );
   }
 }
 
@@ -376,7 +398,7 @@ export class UnknownReading {
 }
 
 /** One reading of one image. */
-export type Reading = AgeReading | AiGeneratedReading | FaceDetectionReading | WantedPersonReading | OcrReading | UnknownReading;
+export type Reading = AgeReading | AiGeneratedReading | FaceDetectionReading | FaceRecognitionReading | OcrReading | UnknownReading;
 
 /** Parses one reading by the booster that made it. */
 export function parseReading(booster: string, raw: unknown): Reading {
@@ -384,7 +406,7 @@ export function parseReading(booster: string, raw: unknown): Reading {
     if (booster === 'age' && AgeReading.wellFormed(raw)) return new AgeReading(raw);
     if (booster === 'ai_generated' && AiGeneratedReading.wellFormed(raw)) return new AiGeneratedReading(raw);
     if (booster === 'face_detection' && FaceDetectionReading.wellFormed(raw)) return new FaceDetectionReading(raw);
-    if (booster === 'wanted_person' && WantedPersonReading.wellFormed(raw)) return new WantedPersonReading(raw);
+    if (booster === 'face_recognition' && FaceRecognitionReading.wellFormed(raw)) return new FaceRecognitionReading(raw);
     if (booster === 'ocr' && OcrReading.wellFormed(raw)) return new OcrReading(raw);
   }
   return new UnknownReading(raw);
@@ -428,7 +450,7 @@ export interface EvidenceByBooster {
   age?: Evidence<AgeReading | UnknownReading>;
   ai_generated?: Evidence<AiGeneratedReading | UnknownReading>;
   face_detection?: Evidence<FaceDetectionReading | UnknownReading>;
-  wanted_person?: Evidence<WantedPersonReading | UnknownReading>;
+  face_recognition?: Evidence<FaceRecognitionReading | UnknownReading>;
   ocr?: Evidence<OcrReading | UnknownReading>;
   [booster: string]: Evidence | undefined;
 }

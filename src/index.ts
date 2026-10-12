@@ -89,7 +89,7 @@ export {
   FaceDetectionReading,
   OcrReading,
   UnknownReading,
-  WantedPersonReading,
+  FaceRecognitionReading,
   parseBoostersHeader,
   type BoosterInput,
   type BoosterName,
@@ -101,9 +101,17 @@ export {
   type FaceDetection,
   type Reading,
   type TopGenerator,
-  type WantedMatch,
+  type FaceMatch,
   type WireBooster,
 } from './boosters.js';
+export {
+  Collections,
+  type Collection,
+  type CollectionItem,
+  type CollectionItemPage,
+  type CollectionsContext,
+  type Deleted,
+} from './collections.js';
 export {
   MAX_VIDEOS,
   MAX_VIDEO_FPS,

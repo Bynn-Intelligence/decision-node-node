@@ -127,12 +127,12 @@ describe('the boosters option', () => {
     const prompt = 'x'.repeat(2001);
     await dn.decide({
       questions: { q: truth('?') },
-      boosters: ['face_detection', new Booster('ocr', { options: { prompt } }), new Booster('wanted_person', { options: { threshold: 0.8 } })],
+      boosters: ['face_detection', new Booster('ocr', { options: { prompt } }), new Booster('face_recognition', { options: { collection: 'celebrities', threshold: 0.8 } })],
     });
     expect(sent(calls[0]!.body).boosters).toEqual([
       'face_detection',
       { name: 'ocr', options: { prompt } },
-      { name: 'wanted_person', options: { threshold: 0.8 } },
+      { name: 'face_recognition', options: { collection: 'celebrities', threshold: 0.8 } },
     ]);
   });
 

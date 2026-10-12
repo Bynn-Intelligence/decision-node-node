@@ -10,6 +10,7 @@ import {
   type DecisionResult,
 } from './answers.js';
 import { Batches, CHECK_REQUESTS, type BatchRequest, type BatchRun, type RunBatchOptions } from './batches.js';
+import { Collections } from './collections.js';
 import type { BoosterInput } from './boosters.js';
 import { checkRequest, checkSessionOpen, type HeldLimits } from './checks.js';
 import { BadRequestError, DecisionNodeError, ServerError, localError } from './errors.js';
@@ -304,6 +305,8 @@ export class DecisionNode {
   readonly uploadTimeout: number;
   /** The Batch API: `create`, `add`, `finalize`, `get`, `list`, `results`, `cancel` and `run`. */
   readonly batches: Batches;
+  /** Collections of faces: `create`, `list`, `get`, `delete`, `enroll`, `listItems` and `deleteItem`. */
+  readonly collections: Collections;
   readonly #transport: Transport;
   readonly #placer: ImagePlacer;
   /** Whether the caller set `timeout`: a set timeout is used as given, also for a decision naming `ocr`. */
@@ -369,6 +372,11 @@ export class DecisionNode {
       placer: this.#placer,
       model: this.model,
       limits: (model) => this.#limits(model),
+    });
+    this.collections = new Collections({
+      transport: this.#transport,
+      placer: this.#placer,
+      limits: () => this.#limits(),
     });
   }
 

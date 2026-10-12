@@ -22,7 +22,7 @@ import {
   FaceDetectionReading,
   OcrReading,
   UnknownReading,
-  WantedPersonReading,
+  FaceRecognitionReading,
   type FaceBox,
   type Reading,
   BoxAnswer,
@@ -240,8 +240,20 @@ function normReading(r: Reading): Json {
   if (r instanceof FaceDetectionReading) {
     return { kind: 'face_detection', image: r.image, faces: r.faces, detections: r.detections.map((d) => ({ box: normBox(d.box), confidence: d.confidence })) };
   }
-  if (r instanceof WantedPersonReading) {
-    return { kind: 'wanted_person', image: r.image, faces: r.faces, matches: r.matches.map((m) => ({ box: normBox(m.box), score: m.score, reference: m.reference })) };
+  if (r instanceof FaceRecognitionReading) {
+    return {
+      kind: 'face_recognition',
+      image: r.image,
+      faces: r.faces,
+      matches: r.matches.map((m) => ({
+        box: normBox(m.box),
+        score: m.score,
+        collection: m.collection,
+        reference: m.reference,
+        name: m.name,
+        label: m.label,
+      })),
+    };
   }
   if (r instanceof OcrReading) return { kind: 'ocr', image: r.image, text: r.text, truncated: r.truncated };
   if (r instanceof UnknownReading) return { kind: 'unknown', raw: r.raw };
@@ -569,6 +581,30 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
       return client.batches.list({ offset: args.offset, limit: args.limit });
     case 'batches.results':
       return client.batches.results(decode(args.batch_id, ctx));
+    case 'collections.create': {
+      const p: Json = { name: decode(args.name, ctx) };
+      if ('type' in args) p.type = decode(args.type, ctx);
+      return client.collections.create(p);
+    }
+    case 'collections.list':
+      return client.collections.list();
+    case 'collections.get':
+      return client.collections.get(decode(args.collection_id, ctx));
+    case 'collections.delete':
+      return client.collections.delete(decode(args.collection_id, ctx));
+    case 'collections.enroll': {
+      const p: Json = { image: decode(args.image, ctx), reference: decode(args.reference, ctx) };
+      if ('label' in args) p.label = decode(args.label, ctx);
+      return client.collections.enroll(decode(args.collection_id, ctx), p);
+    }
+    case 'collections.list_items': {
+      const p: Json = {};
+      if ('offset' in args) p.offset = args.offset;
+      if ('limit' in args) p.limit = args.limit;
+      return client.collections.listItems(decode(args.collection_id, ctx), p);
+    }
+    case 'collections.delete_item':
+      return client.collections.deleteItem(decode(args.collection_id, ctx), decode(args.item_id, ctx));
     default:
       throw new Error(`unknown method ${method}`);
   }
@@ -839,6 +875,21 @@ function checkBatchResult(spec: Json, r: BatchResult, where: string): void {
   if (spec.no_decision && r.decision !== null) throw new Error(`${where}: expected no decision`);
 }
 
+// The collections calls' results (suite 1.13), each the API's object as sent;
+// `collections` is the list, compared in order and by length.
+const COLLECTION_KINDS = ['collection', 'collections', 'item', 'item_page', 'deleted'];
+
+function checkCollectionResult(kind: string, expected: Json, result: Json, path: string): void {
+  if (kind === 'collections') {
+    if (!Array.isArray(result)) throw new Error(`${path}: expected a list of collections, got ${short(result)}`);
+    if (expected === undefined) return;
+    if (expected.length !== result.length) throw new Error(`${path}: expected ${expected.length} collections, got ${result.length}`);
+    expected.forEach((e: Json, i: number) => match(e, result[i], `${path}[${i}]`));
+    return;
+  }
+  match(expected, result, path);
+}
+
 async function runResponse(c: Json): Promise<void> {
   const session = randomUUID();
   const client = makeClient({ client: { api_key: 'dn_test_conformance' } }, mockUrl, {
@@ -872,6 +923,9 @@ async function runResponse(c: Json): Promise<void> {
     match(exp.session, normSession(result), 'session');
   } else if ('upload_ids' in exp) {
     if (!same(exp.upload_ids, result)) throw new Error(`upload_ids: expected ${short(exp.upload_ids)}, got ${short(result)}`);
+  } else if (COLLECTION_KINDS.some((k) => k in exp)) {
+    const kind = COLLECTION_KINDS.find((k) => k in exp)!;
+    checkCollectionResult(kind, exp[kind], result, kind);
   } else {
     throw new Error(`no known expectation in ${short(Object.keys(exp))}`);
   }
@@ -950,6 +1004,13 @@ async function checkOutcome(spec: Json, result: unknown, path: string): Promise<
       return;
     case 'checked':
       if (r !== undefined && r !== null) throw new Error(`${path}: the check returned ${short(r)}; a request that passes returns nothing`);
+      return;
+    case 'collection':
+    case 'collections':
+    case 'item':
+    case 'item_page':
+    case 'deleted':
+      checkCollectionResult(spec.result, spec[spec.result] ?? (spec.result === 'collections' ? undefined : {}), r, `${path}.${spec.result}`);
       return;
     case 'session':
       if (!(r instanceof Session)) throw new Error(`${path}: expected a Session, got ${short(r)}`);
