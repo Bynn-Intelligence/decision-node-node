@@ -191,7 +191,7 @@ if (cars.complete < 0.5) askAgainWithMore();
 | `points` or `boxes` | The places from left to right by the centre (ties from the top), each with its own `confidence`, in the units asked for; an empty list when none is found |
 | `image`, `width`, `height` | As for one place |
 
-The instructions name the kind of thing ("every car", "all the damaged parcels"); with a condition ("every parcel with a torn label") the places are those that satisfy it. `max` is checked before anything is sent (a whole number, 2 to 16), and a fault throws `ValidationError` as the API would. A model version that answers several places says so in `models()` (`places.max_places`); once the client holds a model's entry without it, a question with `max` throws the API's `ValidationError` (`not_supported`) before sending.
+The instructions name the kind of thing ("every car", "all the damaged parcels"); with a condition ("every parcel with a torn label") the places are those that satisfy it. `max` is checked before anything is sent (a whole number, 2 to 16), and a fault throws `ValidationError` as the API would. A model version that answers several places says so in `models()` (`places.max_places`); a model that does not answers a question with `max` with the API's `ValidationError` (`not_supported`).
 
 A point or box question needs an image in the request. With two or more images, name the one to look in by its id (`point(instructions, 'belt')`); a reference by number ("Picture 2") goes in the instructions. These rules and the units (`'pixels'` or `'normalized'`) are checked before anything is sent, and a fault throws `ValidationError` as the API would. `decide`, `decideMany` and batch requests take point and box questions.
 

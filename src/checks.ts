@@ -439,12 +439,7 @@ export function checkRequest(
   extra: Entry[] = [],
   imageIds: readonly unknown[] | null = null,
   tail: Entry[] = [],
-  places = true,
 ): void {
-  if (places) {
-    const unsupported = placesNotSupported(body, limits);
-    if (unsupported.length > 0) throw localValidation(unsupported);
-  }
   checkNesting(body);
   const entries: Entry[] = [...extra];
   const deferred: Error[] = [];
@@ -455,25 +450,6 @@ export function checkRequest(
   entries.push(...tail);
   if (entries.length > 0) throw localValidation(entries);
   if (deferred.length > 0) throw deferred[0]!;
-}
-
-/**
- * A model whose held `/v1/models` entry states no `places.max_places` (absent
- * or 0) answers no question with `max`: the API's `not_supported` entry, one
- * per such question. With no entry held, the server decides.
- */
-function placesNotSupported(body: Record<string, unknown>, limits: HeldLimits): Entry[] {
-  if (limits.name === undefined) return [];
-  const held = limits.places;
-  if (isObject(held) && typeof held.max_places === 'number' && held.max_places > 0) return [];
-  const questions = isObject(body.questions) ? body.questions : {};
-  const out: Entry[] = [];
-  for (const [id, q] of Object.entries(questions)) {
-    if (isObject(q) && (q.type === 'point' || q.type === 'box') && present(q.max)) {
-      out.push(entry('not_supported', ['body', 'questions', id, q.type, 'max'], 'Several places are not supported by this model version', q.max));
-    }
-  }
-  return out;
 }
 
 /** The questions alone, as on `/v1/decide`. */
@@ -510,8 +486,7 @@ export function checkSessionOpen(body: Record<string, unknown>, limits: HeldLimi
       entries.push(entry('less_than_equal', ['body', name], `Input should be less than or equal to ${hi}`, v, { le: hi }));
     }
   }
-  // A session's point and box questions are the server's: no held places capability applies.
-  checkRequest({ questions: body.questions }, limits, entries, null, [], false);
+  checkRequest({ questions: body.questions }, limits, entries);
   if (sessions.enabled === false) {
     throw localError(BadRequestError, `Model ${String(limits.model)} does not serve sessions.`);
   }

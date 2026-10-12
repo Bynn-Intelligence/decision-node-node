@@ -721,7 +721,7 @@ export class DecisionNode {
     options: SuperviseOptions = {},
   ): Promise<SessionClosed | null> {
     if (body === null || typeof body !== 'object') throw new TypeError('supervise takes the session body as an object');
-    checkRequest({ questions: checkQuestionMap(body.questions) }, this.#limits(body.model ?? undefined), [], null, [], false);
+    checkRequest({ questions: checkQuestionMap(body.questions) }, this.#limits(body.model ?? undefined));
     return runSupervise(
       () => this.openSession(body, { signal: options.signal }),
       feed,

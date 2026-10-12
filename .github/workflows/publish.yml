@@ -1,4 +1,6 @@
 # Runs only while the repository is public: nothing is bumped, tagged or published while it is private.
+# The one other change from the copied workflow: the packed files are checked
+# for names that must not ship before anything is pushed or published.
 #
 # Auto-release @bynn/decisionnode on every push to main: bump the patch, keep
 # the in-code version string (src/version.ts) in step, run the checks,
@@ -61,6 +63,12 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # The files npm publish sends, packed and checked for names that must not
+      # ship, before the bump is pushed or anything is published.
+      - run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          npm pack --pack-destination "$RUNNER_TEMP/pack"
+          python3 .github/scripts/check_names.py "$RUNNER_TEMP/pack"
 
       - run: |
           git add package.json package-lock.json src/version.ts

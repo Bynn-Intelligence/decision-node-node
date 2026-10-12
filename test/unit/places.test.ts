@@ -10,7 +10,6 @@ import {
   box,
   parseAnswer,
   point,
-  truth,
 } from '../../src/index.js';
 import { fakeFetch, type Reply } from './helpers.js';
 
@@ -113,28 +112,19 @@ describe('several places', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('refuses max locally when the held model entry states no places, but not on a session open', async () => {
+  it('sends max whatever the held model entry says about places, since the capability is the API to judge', async () => {
     const off = { name: 'decisionnode-moe', version: 'decisionnode-moe-0.9.0-rc1', alias: 'decisionnode-moe', places: { max_places: 0 } };
-    const { dn, calls } = client([{ status: 200, body: { models: [off] } }, OK]);
+    const refused = {
+      status: 422,
+      body: { detail: [{ type: 'not_supported', loc: ['body', 'questions', 'cars', 'box', 'max'], msg: 'Several places are not supported by this model version', input: 8 }] },
+    };
+    const { dn, calls } = client([{ status: 200, body: { models: [off] } }, refused]);
     await dn.models();
-    const err = await dn
-      .decide({ images: [LOT], questions: { cars: box(CARS, 'lot', null, 8), people: point('Each person.', 'lot', null, 6), ok: truth('?') } })
-      .catch((e: unknown) => e);
+    const err = await dn.decide({ images: [LOT], questions: { cars: box(CARS, 'lot', null, 8) } }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ValidationError);
-    expect((err as ValidationError).entries).toEqual([
-      { type: 'not_supported', loc: ['body', 'questions', 'cars', 'box', 'max'], msg: 'Several places are not supported by this model version', input: 8 },
-      { type: 'not_supported', loc: ['body', 'questions', 'people', 'point', 'max'], msg: 'Several places are not supported by this model version', input: 6 },
-    ]);
-    await expect(dn.checkRequest('openSession', { questions: { cars: box(CARS, undefined, null, 8) } })).resolves.toBeUndefined();
-    await expect(dn.decide({ images: [LOT], questions: { cars: box(CARS) } })).resolves.toBeDefined();
+    expect((err as ValidationError).status).toBe(422);
     expect(calls.map((c) => c.method)).toEqual(['GET', 'POST']);
-  });
-
-  it('sends max when the held entry states places, and leaves it to the server when nothing is held', async () => {
-    const on = { name: 'decisionnode-moe', version: 'decisionnode-moe-0.9.0-rc1', alias: 'decisionnode-moe', places: { max_places: 16 } };
-    const held = client([{ status: 200, body: { models: [on] } }, OK]);
-    await held.dn.models();
-    await expect(held.dn.decide({ images: [LOT], questions: { cars: box(CARS, 'lot', null, 8) } })).resolves.toBeDefined();
+    expect(JSON.parse(calls[1]!.body!).questions.cars.max).toBe(8);
     const fresh = client();
     await expect(fresh.dn.decide({ images: [LOT], questions: { cars: box(CARS, 'lot', null, 8) } })).resolves.toBeDefined();
     expect(fresh.calls).toHaveLength(1);
