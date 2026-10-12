@@ -305,8 +305,6 @@ Boosters read images in every form (URL, inline or uploaded), and every question
 | `AiGeneratedReading` | `image`, `generated` (the probability that a generator made the picture), `confidence`, `method` (`inference`: read from the pixels; `c2pa`: the file's trusted Content Credentials declare it generated or edited by AI), `topGenerator` (`name` and `probability` of the likeliest generator when the reading says likely generated; `null` otherwise, and always on a `c2pa` reading), `c2paSigner` (who signed the file's Content Credentials when they are trusted, else `null`), `c2pa` (`untrusted` when the file carries Content Credentials that validate but are not trusted, which change nothing in the reading; else `null`) |
 | `UnknownReading` | `image` and `raw`: a reading of a booster this version does not know, or one with a field missing or of the wrong type. The decision does not fail |
 
-A face's `box` is `{ x1, y1, x2, y2 }`, its corners as in "Points and boxes": pixels of the image as sent, or fractions when every place question of the request asks for `units: 'normalized'`. The numbers are as sent, never converted.
-
 A request whose boosters name `ocr` waits 30 s per attempt by default instead of 10 s. A `timeout` you set on the client is used as given, even below 30 s. Such a decision is never retried after a timeout, because the server finishes the timed-out attempt and may bill it: set a timeout of at least 30 s for requests that name `ocr`. Its other retries (408, 429, 5xx, a lost connection) stay.
 
 Each reading also has `raw`. Numbers are passed through as received. `usage.boosterTokens` (the readings' share of `inputTokens`) and `usage.boosters` (the booster calls billed) are `null` for a request without boosters.
