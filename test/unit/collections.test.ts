@@ -7,7 +7,6 @@ import {
   Image,
   NotFoundError,
   PermissionDeniedError,
-  ServerError,
   ValidationError,
 } from '../../src/index.js';
 import { fakeFetch, type Recorded, type Reply } from './helpers.js';
@@ -115,23 +114,75 @@ describe('collections: the calls', () => {
   });
 });
 
-describe('collections: retries', () => {
-  it('retries create and enroll only on 429 and 529, never on another 5xx', async () => {
-    const busy = client([BUSY, { status: 201, body: COLLECTION }]);
-    await busy.dn.collections.create({ name: 'Staff' });
-    expect(busy.calls).toHaveLength(2);
-    const broken = client([BROKEN, { status: 201, body: COLLECTION }]);
-    expect(await refusal(() => broken.dn.collections.create({ name: 'Staff' }))).toBeInstanceOf(ServerError);
-    expect(broken.calls).toHaveLength(1);
-    const enroll = client([BROKEN, { status: 201, body: ENROLLED }]);
-    expect(await refusal(() => enroll.dn.collections.enroll(COL, { image: BADGE, reference: 'emp-1042' }))).toBeInstanceOf(ServerError);
-    expect(enroll.calls).toHaveLength(1);
+describe('collections: retries and the Idempotency-Key', () => {
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  const IN_PROGRESS = {
+    status: 409,
+    headers: { 'retry-after': '1' },
+    body: { detail: { error_type: 'idempotency_in_progress', message: 'A request with this Idempotency-Key is still running. Try again shortly.' } },
+  };
+  const REUSED = {
+    status: 409,
+    body: { detail: { error_type: 'idempotency_key_reused', message: 'This Idempotency-Key was already used with a different request.' } },
+  };
+  const key = (call: Recorded) => call.headers['idempotency-key'];
+
+  it('sends a UUID v4 key on create and enroll, the same on every attempt, retried like any call', async () => {
+    const created = client([BROKEN, BUSY, { status: 201, body: COLLECTION }]);
+    await created.dn.collections.create({ name: 'Staff' });
+    expect(created.calls).toHaveLength(3);
+    expect(key(created.calls[0]!)).toMatch(UUID_V4);
+    expect(new Set(created.calls.map(key)).size).toBe(1);
+    const enrolled = client([BROKEN, { status: 201, body: ENROLLED }]);
+    await enrolled.dn.collections.enroll(COL, { image: BADGE, reference: 'emp-1042' });
+    expect(enrolled.calls).toHaveLength(2);
+    expect(key(enrolled.calls[0]!)).toMatch(UUID_V4);
+    expect(key(enrolled.calls[1]!)).toBe(key(enrolled.calls[0]!));
   });
 
-  it('retries the reads and deletes as every call', async () => {
-    const { dn, calls } = client([BROKEN, { status: 200, body: COLLECTION }]);
+  it('uses a new key for each call', async () => {
+    const { dn, calls } = client([{ status: 201, body: COLLECTION }]);
+    await dn.collections.create({ name: 'Staff' });
+    await dn.collections.create({ name: 'Staff' });
+    expect(key(calls[0]!)).not.toBe(key(calls[1]!));
+  });
+
+  it('retries a 409 idempotency_in_progress after its Retry-After, with the same key', async () => {
+    const f = fakeFetch([IN_PROGRESS, { status: 201, body: ENROLLED }]);
+    const waits: number[] = [];
+    const dn = new DecisionNode({
+      apiKey: 'dn_test',
+      baseUrl: BASE,
+      fetch: f.fetch,
+      fetchHonoursManualRedirect: true,
+      sleep: async (ms: number) => void waits.push(ms),
+    });
+    expect(await dn.collections.enroll(COL, { image: BADGE, reference: 'emp-1042' })).toEqual(ENROLLED);
+    expect(f.calls).toHaveLength(2);
+    expect(waits).toEqual([1000]);
+    expect(key(f.calls[1]!)).toBe(key(f.calls[0]!));
+  });
+
+  it('throws a 409 idempotency_key_reused as the base error, never retried', async () => {
+    const { dn, calls } = client([REUSED, { status: 201, body: ENROLLED }]);
+    const err = (await refusal(() => dn.collections.enroll(COL, { image: BADGE, reference: 'emp-1042' }))) as DecisionNodeError;
+    expect(err.constructor).toBe(DecisionNodeError);
+    expect([err.status, err.errorType]).toEqual([409, 'idempotency_key_reused']);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('returns a replayed answer as sent', async () => {
+    const { dn } = client([{ status: 201, headers: { 'x-decisionnode-idempotent-replay': 'true' }, body: ENROLLED }]);
+    expect(await dn.collections.enroll(COL, { image: BADGE, reference: 'emp-1042' })).toEqual(ENROLLED);
+  });
+
+  it('sends no key on the reads and deletes, which retry as every call', async () => {
+    const { dn, calls } = client([BROKEN, { status: 200, body: COLLECTION }, { status: 200, body: { collections: [] } }, { status: 200, body: { deleted: true } }]);
     await dn.collections.get(COL);
     expect(calls).toHaveLength(2);
+    await dn.collections.list();
+    await dn.collections.delete(COL);
+    expect(calls.every((c) => key(c) === undefined)).toBe(true);
   });
 });
 
@@ -163,8 +214,13 @@ describe('collections: local checks', () => {
   it('refuses a reference not 1 to 64 of the allowed characters and a label over 128', async () => {
     const { dn, calls } = client([{ status: 201, body: ENROLLED }]);
     const enroll = (reference: string, label?: string) => () => dn.collections.enroll(COL, { image: BADGE, reference, label });
+    // The pattern holds the length too, as built: an empty reference fails it.
+    const pattern = '^[A-Za-z0-9_.:-]{1,64}$';
     expect(await entries(enroll(''))).toEqual([
-      { type: 'string_too_short', loc: ['body', 'reference'], msg: 'String should have at least 1 character', input: '', ctx: { min_length: 1 } },
+      { type: 'string_pattern_mismatch', loc: ['body', 'reference'], msg: `String should match pattern '${pattern}'`, input: '', ctx: { pattern } },
+    ]);
+    expect(await entries(() => dn.collections.enroll(COL, { image: BADGE } as never))).toEqual([
+      { type: 'missing', loc: ['body', 'reference'], msg: 'Field required', input: null },
     ]);
     const long = 'r'.repeat(65);
     expect(await entries(enroll(long))).toEqual([
@@ -174,9 +230,9 @@ describe('collections: local checks', () => {
       {
         type: 'string_pattern_mismatch',
         loc: ['body', 'reference'],
-        msg: "String should match pattern '^[A-Za-z0-9_.:-]+$'",
+        msg: `String should match pattern '${pattern}'`,
         input: 'emp 1042',
-        ctx: { pattern: '^[A-Za-z0-9_.:-]+$' },
+        ctx: { pattern },
       },
     ]);
     const label = 'l'.repeat(129);
@@ -188,11 +244,19 @@ describe('collections: local checks', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('checks the enrolled image as a decision image', async () => {
+  it('checks only a URL by the decision rules, and leaves every other picture fault to the API', async () => {
     const { dn, calls } = client([{ status: 201, body: ENROLLED }]);
-    const err = await refusal(() => dn.collections.enroll(COL, { image: Image.fromUrl('plain', 'http://files.example.com/a.jpg'), reference: 'emp-1' }));
+    const err = (await refusal(() =>
+      dn.collections.enroll(COL, { image: Image.fromUrl('plain', 'https://files.example.com:8443/a.jpg'), reference: 'emp-1' }),
+    )) as BadRequestError;
     expect(err).toBeInstanceOf(BadRequestError);
+    expect(err.errorType).toBe('image_url_refused');
     expect(calls).toHaveLength(0);
+    // Bytes that are no JPEG, PNG or WebP are sent as given; the API answers its 422.
+    const gif = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), (c) => c.charCodeAt(0));
+    await dn.collections.enroll(COL, { image: Image.fromBytes('badge', gif), reference: 'emp-1' });
+    expect(calls).toHaveLength(1);
+    expect((sent(calls[0]!).body as { image: unknown }).image).toEqual({ id: 'badge', media_type: null, data: btoa(String.fromCharCode(...gif)) });
   });
 
   it('refuses offset and limit outside their ranges with the batch list messages', async () => {

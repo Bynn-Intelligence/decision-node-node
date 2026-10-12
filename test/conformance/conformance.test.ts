@@ -1128,6 +1128,22 @@ function checkSequence(expected: Json[], log: Json[]): void {
   });
 }
 
+// Every matching attempt carries one and the same value of a header (an
+// Idempotency-Key kept across retries), as the reference runner checks it.
+function checkSameHeader(spec: Json, log: Json[]): void {
+  const name = String(spec.name).toLowerCase();
+  const hits = log.filter(
+    (r) => (spec.path_suffix == null || String(r.path).endsWith(spec.path_suffix)) && (spec.method == null || r.method === spec.method),
+  );
+  const values = hits.map((r) => (r.headers ?? {})[name] ?? null);
+  if (hits.length < (spec.min ?? 2) || values.includes(null) || new Set(values).size !== 1) {
+    throw new Error(`same_header ${name}: expected one value on every attempt, got ${short(values)}`);
+  }
+  if (spec.pattern && !new RegExp(spec.pattern).test(values[0])) {
+    throw new Error(`same_header ${name}: ${short(values[0])} does not match ${spec.pattern}`);
+  }
+}
+
 function checkCounts(expected: Json[], log: Json[]): void {
   for (const spec of expected) {
     const n = log.filter(
@@ -1201,6 +1217,7 @@ async function runBehaviour(c: Json): Promise<void> {
   }
   if ('request_sequence' in exp) checkSequence(exp.request_sequence, log);
   if ('request_counts' in exp) checkCounts(exp.request_counts, log);
+  if ('same_header' in exp) checkSameHeader(exp.same_header, log);
   if ('session_events' in exp) checkEvents(exp.session_events, events);
   if ('pongs' in exp) inRange(exp.pongs, info.pongs, 'pongs');
   if ('outcome' in exp) await checkOutcome(exp.outcome, result, 'outcome');

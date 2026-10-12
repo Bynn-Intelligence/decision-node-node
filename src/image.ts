@@ -304,6 +304,25 @@ export class Image {
     return checkImageBytes(this, await bytes, this.path === undefined ? this.#declared : undefined, owned, maxBytes);
   }
 
+  /**
+   * The bytes with no check of their format, size or pixels, for a request whose
+   * picture faults are the server's to judge (a collection enrollment): the
+   * media type as given, else as the first bytes show, else null.
+   */
+  async readUnchecked(): Promise<LocalImage> {
+    const owned = this.path !== undefined || this.#base64 !== undefined || isBlob(this.data);
+    let bytes: Uint8Array;
+    if (owned) {
+      this.#bytes ??= this.#read();
+      bytes = await this.#bytes;
+    } else {
+      bytes = await this.#read();
+    }
+    const declared = this.path === undefined ? this.#declared : undefined;
+    const mediaType = (declared ?? sniffMediaType(bytes) ?? null) as ImageMediaType;
+    return { id: this.id, bytes, mediaType, owned, image: this };
+  }
+
   async #read(): Promise<Uint8Array> {
     if (this.#base64 !== undefined) {
       const decoded = fromBase64(this.#base64);

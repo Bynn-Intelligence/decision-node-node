@@ -34,8 +34,11 @@ export type SleepFn = (ms: number, signal?: AbortSignal) => Promise<void>;
  * - `ocr`: as `default`, except a timeout: a decision whose boosters name
  *   `ocr` is never retried after one, since the server finishes the timed-out
  *   attempt and may bill it.
+ * - `idempotent`: a call that carries its own Idempotency-Key, the same on
+ *   every attempt: as `default`, and also a 409 `idempotency_in_progress`,
+ *   after its Retry-After.
  */
-export type RetryPolicy = 'default' | 'mutation' | 'session_open' | 'ocr';
+export type RetryPolicy = 'default' | 'mutation' | 'session_open' | 'ocr' | 'idempotent';
 
 export interface RawResponse {
   /** True when the answer was a redirect the client did not follow, or one the fetch implementation followed anyway. */
@@ -64,6 +67,8 @@ export interface RequestSpec {
   stream?: boolean;
   /** Milliseconds for each attempt of this request, in place of the client's. */
   timeout?: number;
+  /** Headers of this request alone, the same on every attempt (an Idempotency-Key). */
+  headers?: Record<string, string>;
 }
 
 export interface TransportOptions {
@@ -291,13 +296,14 @@ export class Transport {
     if (body !== undefined && this.customHeaders['content-type'] !== undefined) {
       headers['content-type'] = this.customHeaders['content-type'];
     }
+    const sent = spec.headers === undefined ? headers : { ...headers, ...spec.headers };
 
     for (let attempt = 0; ; attempt++) {
       if (signal?.aborted) throw abortReason(signal);
       const started = nowMs();
       let res: RawResponse;
       try {
-        res = await this.send(method, this.baseUrl + path, headers, body, signal, spec.stream === true, spec.timeout ?? this.timeout);
+        res = await this.send(method, this.baseUrl + path, sent, body, signal, spec.stream === true, spec.timeout ?? this.timeout);
       } catch (err) {
         if (!(err instanceof ConnectionError || err instanceof TimeoutError)) throw err;
         this.#log(method, path, err.name, null, started, attempt);
@@ -317,6 +323,9 @@ export class Transport {
       let retryable = policy === 'mutation' ? res.status === 429 || res.status === 529 : isRetryable(res.status);
       if (policy === 'session_open' && res.status === 429 && errorTypeOf(res.text) === 'session_limit_exceeded') {
         retryable = false;
+      }
+      if (policy === 'idempotent' && res.status === 409 && errorTypeOf(res.text) === 'idempotency_in_progress') {
+        retryable = true;
       }
       if (retryable && attempt < this.maxRetries) {
         const wait = retryAfterSeconds(res.headers) ?? backoffSeconds(attempt);

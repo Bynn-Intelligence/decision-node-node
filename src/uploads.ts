@@ -119,6 +119,22 @@ export class ImagePlacer {
   }
 
   /**
+   * The plan for one image whose picture faults are the server's to judge (a
+   * collection enrollment): a URL by the rules that need no network, an upload
+   * reference or a wire-form object as given, local bytes unchecked.
+   */
+  async planUnchecked(img: ImageInput): Promise<ImagePlan> {
+    if (img === null || typeof img !== 'object') throw new TypeError('an image must be an Image or a wire-form object');
+    if (!(img instanceof Image)) return { slots: [{ wire: img }] };
+    if (img.url !== undefined) {
+      checkImageUrl(img.id, img.url);
+      return { slots: [{ wire: img.referenceWire() }] };
+    }
+    if (img.uploadId !== undefined) return { slots: [{ wire: img.referenceWire() }] };
+    return { slots: [{ local: await img.readUnchecked() }] };
+  }
+
+  /**
    * The wire forms. Local images with a live cache entry go by `upload_id`;
    * the others go inline while the request's local images total under the
    * threshold, and are uploaded at or above it (or always, with `alwaysUpload`).

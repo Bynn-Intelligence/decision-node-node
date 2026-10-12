@@ -57,7 +57,8 @@ export interface Deleted {
 const MAX_NAME_CHARS = 80;
 const MAX_REFERENCE_CHARS = 64;
 const MAX_LABEL_CHARS = 128;
-const REFERENCE_PATTERN = '^[A-Za-z0-9_.:-]+$';
+// The pattern holds the length too, as built: an empty reference fails it.
+const REFERENCE_PATTERN = '^[A-Za-z0-9_.:-]{1,64}$';
 const MAX_LIST_LIMIT = 100;
 
 /** A string field's 422 entries, as the API lists them: missing, not a string, too short, too long, or off its pattern. */
@@ -78,15 +79,23 @@ function stringEntries(loc: string[], value: unknown, least: number, most: numbe
   return [];
 }
 
+/** A fresh Idempotency-Key for one call, kept on every attempt of it. */
+function idempotencyKey(): Record<string, string> {
+  return { 'idempotency-key': globalThis.crypto.randomUUID() };
+}
+
 function path(...ids: string[]): string {
   return ids.map((id) => encodeURIComponent(String(id))).join('/');
 }
 
 /**
  * `client.collections`: create, list, get and delete collections, and enroll,
- * list and delete their items. `create` and `enroll` are retried only on 429
- * and 529, as a batch's create is: a retried enrollment would enroll the face,
- * and bill it, twice. The reads and deletes are retried as every call.
+ * list and delete their items. `create` and `enroll` send an Idempotency-Key,
+ * a new UUID per call and the same on every attempt of it, so the server
+ * creates, enrolls and bills once however often the call is tried; they then
+ * retry like any call, and also on a 409 `idempotency_in_progress` after its
+ * Retry-After. A 409 `idempotency_key_reused` is thrown and never retried.
+ * The reads and deletes carry no key and are retried as every call.
  */
 export class Collections {
   readonly #ctx: CollectionsContext;
@@ -108,7 +117,8 @@ export class Collections {
       method: 'POST',
       path: '/v1/collections',
       body: JSON.stringify({ type, name: params.name }),
-      policy: 'mutation',
+      policy: 'idempotent',
+      headers: idempotencyKey(),
       signal: options.signal,
     });
     return body as Collection;
@@ -134,8 +144,10 @@ export class Collections {
 
   /**
    * Enrolls one face from one image (`POST /v1/collections/{id}/items`) under
-   * `reference`, with an optional `label`. The image is checked and sent as a
-   * decision's image is: a URL as given, local bytes inline or uploaded.
+   * `reference`, with an optional `label`. The image is sent as a decision's
+   * image is: a URL as given, local bytes inline or uploaded. Only a URL's
+   * rules are checked here; every other fault of the picture is the API's 422
+   * `image_unreadable`.
    */
   async enroll(
     collectionId: string,
@@ -145,18 +157,20 @@ export class Collections {
     const { image, reference, label } = params;
     const entries: Entry[] = [];
     if (image === undefined || image === null) entries.push(entry('missing', ['body', 'image'], 'Field required', { reference }));
-    entries.push(...stringEntries(['body', 'reference'], reference, 1, MAX_REFERENCE_CHARS, REFERENCE_PATTERN));
+    if (reference === undefined || reference === null) entries.push(entry('missing', ['body', 'reference'], 'Field required', null));
+    else entries.push(...stringEntries(['body', 'reference'], reference, 0, MAX_REFERENCE_CHARS, REFERENCE_PATTERN));
     if (label !== undefined && label !== null) entries.push(...stringEntries(['body', 'label'], label, 0, MAX_LABEL_CHARS));
     if (entries.length > 0) throw localValidation(entries);
-    const plan = await this.#ctx.placer.check([image], this.#ctx.limits());
-    const { wires } = await this.#ctx.placer.place(plan!, options.signal);
+    const plan = await this.#ctx.placer.planUnchecked(image);
+    const { wires } = await this.#ctx.placer.place(plan, options.signal);
     const body: Record<string, unknown> = { image: wires[0], reference };
     if (label !== undefined && label !== null) body.label = label;
     const res = await this.#ctx.transport.json({
       method: 'POST',
       path: `/v1/collections/${path(collectionId)}/items`,
       body: JSON.stringify(body),
-      policy: 'mutation',
+      policy: 'idempotent',
+      headers: idempotencyKey(),
       signal: options.signal,
     });
     return res.body as CollectionItem;
