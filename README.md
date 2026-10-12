@@ -50,8 +50,8 @@ Answer types follow from the questions: `d.answers.escalate` is a `TruthAnswer`,
 | `choice(instructions, options)` | `ChoiceAnswer` | `choice`, `confidence`, `probabilities` by option name |
 | `score(instructions, levels)` | `ScoreAnswer` | `score` (expected level index), `confidence`, `probabilities` and `legend` by level index |
 | `number(instructions, min?, max?, step?)` | `NumberAnswer` | `number` (the most probable value), `expected` (the mean), `confidence`, `probabilities` by value |
-| `point(instructions, image?, units?)` | `PointAnswer` | `x`, `y`, `present`, `confidence`, `image`, `width`, `height` (see Points and boxes) |
-| `box(instructions, image?, units?)` | `BoxAnswer` | `x1`, `y1`, `x2`, `y2`, `present`, `confidence`, `image`, `width`, `height` |
+| `point(instructions, image?, units?, max?)` | `PointAnswer`, or `PointsAnswer` with `max` | `x`, `y`, `present`, `confidence`, `image`, `width`, `height`; with `max`, `count`, `present`, `complete`, `points`, `image`, `width`, `height` (see Points and boxes) |
+| `box(instructions, image?, units?, max?)` | `BoxAnswer`, or `BoxesAnswer` with `max` | `x1`, `y1`, `x2`, `y2`, `present`, `confidence`, `image`, `width`, `height`; with `max`, `count`, `present`, `complete`, `boxes`, `image`, `width`, `height` |
 
 `options` is a map of name to description, or a list of names: 1 to 255 of them. `levels` run low to high, 1 to 10 of them. `state`, `instructions`, descriptions and levels take a string or any JSON value.
 
@@ -164,7 +164,34 @@ if (pick.present > 0.8 && pick.confidence > 0.7) {
 | `confidence` | The probability that the place is right, if the thing is there: for a point, that it lies on the thing; for a box, that it overlaps the true box by at least half (intersection over union of 0.5 or more) |
 | `image`, `width`, `height` | The image the answer refers to and its size in pixels, so you can draw or convert the answer without another lookup |
 
-Every field is always there. When several things match, the answer is the best match; say which one you mean in the instructions ("the leftmost yellow package").
+Every field is always there. When several things match, the answer is the best match; say which one you mean in the instructions ("the leftmost yellow package"), or ask for several.
+
+### Several places in one answer
+
+With `max` (a whole number from 2 to 16), a point or box question answers up to that many places, one per thing the instructions describe:
+
+```ts
+const d = await dn.decide({
+  images: [Image.fromUrl('lot', 'https://files.example.com/lot/0917.jpg')],
+  questions: {
+    cars: box('Every car in the lot.', 'lot', null, 8),
+  },
+});
+
+const cars = d.answers.cars; // a BoxesAnswer
+for (const car of cars.boxes) draw(car.x1, car.y1, car.x2, car.y2, car.confidence);
+if (cars.complete < 0.5) askAgainWithMore();
+```
+
+| Field | |
+|---|---|
+| `count` | How many places follow, 0 to `max` |
+| `present` | The probability that at least one such thing is in the image |
+| `complete` | The probability that nothing was left out: that the true number is not above `max`. Low when the picture holds more than you asked for; raise `max` or narrow the instructions |
+| `points` or `boxes` | The places from left to right by the centre (ties from the top), each with its own `confidence`, in the units asked for; an empty list when none is found |
+| `image`, `width`, `height` | As for one place |
+
+The instructions name the kind of thing ("every car", "all the damaged parcels"); with a condition ("every parcel with a torn label") the places are those that satisfy it. `max` is checked before anything is sent (a whole number, 2 to 16), and a fault throws `ValidationError` as the API would. A model version that answers several places says so in `models()` (`places.max_places`); once the client holds a model's entry without it, a question with `max` throws the API's `ValidationError` (`not_supported`) before sending.
 
 A point or box question needs an image in the request. With two or more images, name the one to look in by its id (`point(instructions, 'belt')`); a reference by number ("Picture 2") goes in the instructions. These rules and the units (`'pixels'` or `'normalized'`) are checked before anything is sent, and a fault throws `ValidationError` as the API would. `decide`, `decideMany` and batch requests take point and box questions.
 

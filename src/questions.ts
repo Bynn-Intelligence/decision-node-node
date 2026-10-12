@@ -47,6 +47,13 @@ export interface PointQuestion {
   image?: string;
   /** `pixels` (the API's default) or `normalized` (fractions of the width and height). */
   units?: PlaceUnits;
+  /** Up to this many points, 2 to 16, one per thing the instructions describe: the answer is a `PointsAnswer`. */
+  max?: number;
+}
+
+/** A point question asked with `max`: answered with a `PointsAnswer`. */
+export interface PointsQuestion extends PointQuestion {
+  max: number;
 }
 
 /** Draw a box around it. Answered with the corners `x1`, `y1`, `x2`, `y2`. */
@@ -60,6 +67,13 @@ export interface BoxQuestion {
   image?: string;
   /** `pixels` (the API's default) or `normalized` (fractions of the width and height). */
   units?: PlaceUnits;
+  /** Up to this many boxes, 2 to 16, one per thing the instructions describe: the answer is a `BoxesAnswer`. */
+  max?: number;
+}
+
+/** A box question asked with `max`: answered with a `BoxesAnswer`. */
+export interface BoxesQuestion extends BoxQuestion {
+  max: number;
 }
 
 /** A question of a type this SDK version does not know, sent as given. */
@@ -170,31 +184,49 @@ export type PlaceUnits = 'pixels' | 'normalized';
  * `image` is the id of the image to look in (a string, required when the request
  * has two or more images; a reference by number such as "Picture 2" goes in the
  * instructions); `image` and `units` are left out of the request when not given.
+ * With `max` (2 to 16), up to that many points come back, one per thing the
+ * instructions describe, as a `PointsAnswer`; it is left out when not given.
  *
  * ```ts
  * point('Point to the yellow package closest to the robot arm.');
+ * point('Each person standing on the platform.', 'platform', null, 6);
  * ```
  */
-export function point(instructions: unknown, image?: string | null, units?: PlaceUnits | null): PointQuestion {
-  return place('point', instructions, image, units) as PointQuestion;
+export function point(instructions: unknown, image: string | null | undefined, units: PlaceUnits | null | undefined, max: number): PointsQuestion;
+export function point(instructions: unknown, image?: string | null, units?: PlaceUnits | null, max?: number | null): PointQuestion;
+export function point(instructions: unknown, image?: string | null, units?: PlaceUnits | null, max?: number | null): PointQuestion {
+  return place('point', instructions, image, units, max) as PointQuestion;
 }
 
 /**
  * A box question: draw a box around it. Answered with the top-left corner
  * (`x1`, `y1`) and the bottom-right corner (`x2`, `y2`).
  *
+ * With `max` (2 to 16), up to that many boxes come back, one per thing the
+ * instructions describe, as a `BoxesAnswer`; it is left out when not given.
+ *
  * ```ts
  * box('Draw a box around the damaged package.', 'belt');
+ * box('Every car in the lot.', 'lot', null, 8);
  * ```
  */
-export function box(instructions: unknown, image?: string | null, units?: PlaceUnits | null): BoxQuestion {
-  return place('box', instructions, image, units) as BoxQuestion;
+export function box(instructions: unknown, image: string | null | undefined, units: PlaceUnits | null | undefined, max: number): BoxesQuestion;
+export function box(instructions: unknown, image?: string | null, units?: PlaceUnits | null, max?: number | null): BoxQuestion;
+export function box(instructions: unknown, image?: string | null, units?: PlaceUnits | null, max?: number | null): BoxQuestion {
+  return place('box', instructions, image, units, max) as BoxQuestion;
 }
 
-function place(type: 'point' | 'box', instructions: unknown, image?: string | null, units?: PlaceUnits | null): PointQuestion | BoxQuestion {
+function place(
+  type: 'point' | 'box',
+  instructions: unknown,
+  image?: string | null,
+  units?: PlaceUnits | null,
+  max?: number | null,
+): PointQuestion | BoxQuestion {
   const q: Record<string, unknown> = { type };
   if (instructions !== undefined && instructions !== null) q.instructions = instructions;
   if (image !== undefined && image !== null) q.image = image;
   if (units !== undefined && units !== null) q.units = units;
+  if (max !== undefined && max !== null) q.max = max;
   return q as unknown as PointQuestion | BoxQuestion;
 }

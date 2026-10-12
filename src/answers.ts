@@ -122,6 +122,94 @@ export class BoxAnswer extends Answer {
   }
 }
 
+/** One place of a `PointsAnswer`: a point and its own confidence. */
+export interface PointPlace {
+  x: number;
+  y: number;
+  /** The probability that this point is right. */
+  confidence: number;
+}
+
+/** One place of a `BoxesAnswer`: a box's corners and its own confidence. */
+export interface BoxPlace {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  /** The probability that this box is right. */
+  confidence: number;
+}
+
+/** The answer to a `point` question asked with `max`: up to `max` points, one per thing found. */
+export class PointsAnswer extends Answer {
+  declare readonly type: 'point';
+  /** How many points follow, 0 to `max`. */
+  readonly count: number;
+  /** The probability that at least one such thing is in the image. */
+  readonly present: number;
+  /** The probability that nothing was left out: that the true number is not above `max`. */
+  readonly complete: number;
+  /** The points, left to right by the centre (ties from the top), in the units asked for, as sent. */
+  readonly points: PointPlace[];
+  /** The id of the image looked in. */
+  readonly image: string;
+  /** That image's width in pixels. */
+  readonly width: number;
+  /** That image's height in pixels. */
+  readonly height: number;
+
+  constructor(raw: RawAnswer) {
+    super(raw);
+    this.count = raw.count as number;
+    this.present = raw.present as number;
+    this.complete = raw.complete as number;
+    this.points = (raw.points as Array<Record<string, unknown>>).map((p) => ({
+      x: p.x as number,
+      y: p.y as number,
+      confidence: p.confidence as number,
+    }));
+    this.image = raw.image as string;
+    this.width = raw.width as number;
+    this.height = raw.height as number;
+  }
+}
+
+/** The answer to a `box` question asked with `max`: up to `max` boxes, one per thing found. */
+export class BoxesAnswer extends Answer {
+  declare readonly type: 'box';
+  /** How many boxes follow, 0 to `max`. */
+  readonly count: number;
+  /** The probability that at least one such thing is in the image. */
+  readonly present: number;
+  /** The probability that nothing was left out: that the true number is not above `max`. */
+  readonly complete: number;
+  /** The boxes, left to right by the centre (ties from the top), in the units asked for, as sent. */
+  readonly boxes: BoxPlace[];
+  /** The id of the image looked in. */
+  readonly image: string;
+  /** That image's width in pixels. */
+  readonly width: number;
+  /** That image's height in pixels. */
+  readonly height: number;
+
+  constructor(raw: RawAnswer) {
+    super(raw);
+    this.count = raw.count as number;
+    this.present = raw.present as number;
+    this.complete = raw.complete as number;
+    this.boxes = (raw.boxes as Array<Record<string, unknown>>).map((b) => ({
+      x1: b.x1 as number,
+      y1: b.y1 as number,
+      x2: b.x2 as number,
+      y2: b.y2 as number,
+      confidence: b.confidence as number,
+    }));
+    this.image = raw.image as string;
+    this.width = raw.width as number;
+    this.height = raw.height as number;
+  }
+}
+
 /** The answer to a `choice` question. `O` is the union of the option names. */
 export class ChoiceAnswer<O extends string = string> extends Answer {
   declare readonly type: 'choice';
@@ -195,6 +283,23 @@ function isIndexKeyed(v: unknown): boolean {
   return isObject(v) && Object.keys(v).every((k) => /^(0|[1-9][0-9]*)$/.test(k));
 }
 
+/** Whether a several-places answer carries every field, its list's places included, each of the right JSON type. */
+function placesWellFormed(r: RawAnswer, list: 'points' | 'boxes', fields: readonly string[]): boolean {
+  const places = r[list];
+  return (
+    typeof r.count === 'number' &&
+    Number.isInteger(r.count) &&
+    r.count >= 0 &&
+    isNumber(r.present) &&
+    isNumber(r.complete) &&
+    Array.isArray(places) &&
+    places.every((p) => isObject(p) && fields.every((k) => isNumber(p[k]))) &&
+    typeof r.image === 'string' &&
+    isNumber(r.width) &&
+    isNumber(r.height)
+  );
+}
+
 /** Whether an answer of a known type carries every field of that type, each of the right JSON type. */
 function wellFormed(r: RawAnswer): boolean {
   switch (r.type) {
@@ -230,6 +335,13 @@ function wellFormed(r: RawAnswer): boolean {
  */
 export function parseAnswer(raw: unknown): Answer {
   const r = (isObject(raw) ? raw : {}) as RawAnswer;
+  // Several places, told by the answer's own list, not by the request.
+  if ((r.type === 'point' || r.type === 'box') && ('points' in r || 'boxes' in r)) {
+    if (r.type === 'point') {
+      return 'points' in r && placesWellFormed(r, 'points', ['x', 'y', 'confidence']) ? new PointsAnswer(r) : new UnknownAnswer(r);
+    }
+    return 'boxes' in r && placesWellFormed(r, 'boxes', ['x1', 'y1', 'x2', 'y2', 'confidence']) ? new BoxesAnswer(r) : new UnknownAnswer(r);
+  }
   if (!wellFormed(r)) return new UnknownAnswer(r);
   switch (r.type) {
     case 'truth':
@@ -259,11 +371,15 @@ export type AnswerFor<Q> = Q extends { type: 'truth' | 'noul' }
       ? ScoreAnswer
       : Q extends { type: 'number' }
         ? NumberAnswer
-        : Q extends { type: 'point' }
-          ? PointAnswer
-          : Q extends { type: 'box' }
-            ? BoxAnswer
-            : Answer;
+        : Q extends { type: 'point'; max: number }
+          ? PointsAnswer
+          : Q extends { type: 'point' }
+            ? PointAnswer
+            : Q extends { type: 'box'; max: number }
+              ? BoxesAnswer
+              : Q extends { type: 'box' }
+                ? BoxAnswer
+                : Answer;
 
 /** Answers by question id, typed from the questions. */
 export type AnswersFor<Q> = { -readonly [K in keyof Q]: AnswerFor<Q[K]> };

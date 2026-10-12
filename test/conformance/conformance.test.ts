@@ -26,7 +26,9 @@ import {
   type FaceBox,
   type Reading,
   BoxAnswer,
+  BoxesAnswer,
   PointAnswer,
+  PointsAnswer,
   box,
   point,
   BatchResult,
@@ -187,6 +189,12 @@ function normAnswer(a: Answer): Json {
   if (a instanceof ChoiceAnswer) return { kind: 'choice', choice: a.choice, confidence: a.confidence, probabilities: a.probabilities };
   if (a instanceof ScoreAnswer) {
     return { kind: 'score', score: a.score, confidence: a.confidence, probabilities: a.probabilities, legend: a.legend };
+  }
+  if (a instanceof PointsAnswer) {
+    return { kind: 'points', count: a.count, present: a.present, complete: a.complete, points: a.points, image: a.image, width: a.width, height: a.height };
+  }
+  if (a instanceof BoxesAnswer) {
+    return { kind: 'boxes', count: a.count, present: a.present, complete: a.complete, boxes: a.boxes, image: a.image, width: a.width, height: a.height };
   }
   if (a instanceof PointAnswer) {
     return { kind: 'point', x: a.x, y: a.y, present: a.present, confidence: a.confidence, image: a.image, width: a.width, height: a.height };
@@ -395,9 +403,9 @@ function decode(value: Json, ctx: Json = {}): Json {
         case '$number':
           return number(raw.instructions, raw.min, raw.max, raw.step);
         case '$point':
-          return point(raw.instructions, raw.image, raw.units);
+          return point(raw.instructions, raw.image, raw.units, raw.max);
         case '$box':
-          return box(raw.instructions, raw.image, raw.units);
+          return box(raw.instructions, raw.image, raw.units, raw.max);
         case '$booster': {
           // Booster(name, images, require, options): each setting passed only when present.
           const a = decode(raw, ctx);

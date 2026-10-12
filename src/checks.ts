@@ -27,6 +27,9 @@ const MAX_NUMBER_DECIMALS = 6;
 const LEGACY_TRUTH = 'noul';
 const DECIDE_TYPES = new Set(['truth', LEGACY_TRUTH, 'choice', 'score', 'number', 'point', 'box']);
 const PLACE_TYPES = new Set(['point', 'box']);
+/** The fewest and most places a point or box question's `max` asks for. */
+const PLACES_MIN = 2;
+const PLACES_MAX = 16;
 const UNITS = new Set(['pixels', 'normalized']);
 
 
@@ -317,6 +320,17 @@ function checkPlace(
       entry('literal_error', [...loc, 'units'], "Input should be 'pixels' or 'normalized'", units, { expected: "'pixels' or 'normalized'" }),
     );
   }
+  // Several places: max a whole number from 2 to 16.
+  const most = q.max;
+  if (present(most)) {
+    if (typeof most !== 'number' || !Number.isInteger(most)) {
+      entries.push(entry('int_type', [...loc, 'max'], 'Input should be a valid integer', most));
+    } else if (most < PLACES_MIN) {
+      entries.push(entry('greater_than_equal', [...loc, 'max'], `Input should be greater than or equal to ${PLACES_MIN}`, most, { ge: PLACES_MIN }));
+    } else if (most > PLACES_MAX) {
+      entries.push(entry('less_than_equal', [...loc, 'max'], `Input should be less than or equal to ${PLACES_MAX}`, most, { le: PLACES_MAX }));
+    }
+  }
   if (!present(q.instructions)) {
     const name = type === 'point' ? 'Point' : 'Box';
     deferred.push(localError(BadRequestError, `${name} question must have instructions: ${id}`, null));
@@ -425,7 +439,12 @@ export function checkRequest(
   extra: Entry[] = [],
   imageIds: readonly unknown[] | null = null,
   tail: Entry[] = [],
+  places = true,
 ): void {
+  if (places) {
+    const unsupported = placesNotSupported(body, limits);
+    if (unsupported.length > 0) throw localValidation(unsupported);
+  }
   checkNesting(body);
   const entries: Entry[] = [...extra];
   const deferred: Error[] = [];
@@ -436,6 +455,25 @@ export function checkRequest(
   entries.push(...tail);
   if (entries.length > 0) throw localValidation(entries);
   if (deferred.length > 0) throw deferred[0]!;
+}
+
+/**
+ * A model whose held `/v1/models` entry states no `places.max_places` (absent
+ * or 0) answers no question with `max`: the API's `not_supported` entry, one
+ * per such question. With no entry held, the server decides.
+ */
+function placesNotSupported(body: Record<string, unknown>, limits: HeldLimits): Entry[] {
+  if (limits.name === undefined) return [];
+  const held = limits.places;
+  if (isObject(held) && typeof held.max_places === 'number' && held.max_places > 0) return [];
+  const questions = isObject(body.questions) ? body.questions : {};
+  const out: Entry[] = [];
+  for (const [id, q] of Object.entries(questions)) {
+    if (isObject(q) && (q.type === 'point' || q.type === 'box') && present(q.max)) {
+      out.push(entry('not_supported', ['body', 'questions', id, q.type, 'max'], 'Several places are not supported by this model version', q.max));
+    }
+  }
+  return out;
 }
 
 /** The questions alone, as on `/v1/decide`. */
@@ -472,7 +510,8 @@ export function checkSessionOpen(body: Record<string, unknown>, limits: HeldLimi
       entries.push(entry('less_than_equal', ['body', name], `Input should be less than or equal to ${hi}`, v, { le: hi }));
     }
   }
-  checkRequest({ questions: body.questions }, limits, entries);
+  // A session's point and box questions are the server's: no held places capability applies.
+  checkRequest({ questions: body.questions }, limits, entries, null, [], false);
   if (sessions.enabled === false) {
     throw localError(BadRequestError, `Model ${String(limits.model)} does not serve sessions.`);
   }
