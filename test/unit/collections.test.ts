@@ -203,28 +203,58 @@ describe('collections: local checks', () => {
     expect(await entries(() => dn.collections.create({ name: '' }))).toEqual([
       { type: 'string_too_short', loc: ['body', 'name'], msg: 'String should have at least 1 character', input: '', ctx: { min_length: 1 } },
     ]);
+    // A long input is echoed cut to 64 characters, then "...", as the API echoes it.
     const long = 'x'.repeat(81);
     expect(await entries(() => dn.collections.create({ name: long }))).toEqual([
-      { type: 'string_too_long', loc: ['body', 'name'], msg: 'String should have at most 80 characters', input: long, ctx: { max_length: 80 } },
+      {
+        type: 'string_too_long',
+        loc: ['body', 'name'],
+        msg: 'String should have at most 80 characters',
+        input: `${'x'.repeat(64)}...`,
+        ctx: { max_length: 80 },
+      },
     ]);
+    // An object is never echoed; a number is, as it is.
+    expect(await entries(() => dn.collections.create({ name: 'Plates', type: { kind: 'face' } as never }))).toEqual([
+      { type: 'literal_error', loc: ['body', 'type'], msg: "Input should be 'face'", input: null, ctx: { expected: "'face'" } },
+    ]);
+    expect(await entries(() => dn.collections.create({ name: 7 as never }))).toEqual([
+      { type: 'string_type', loc: ['body', 'name'], msg: 'Input should be a valid string', input: 7 },
+    ]);
+    // Counted in code points: 81 characters outside the BMP are cut to 64 of them.
+    const wide = '\u{20000}'.repeat(81);
+    const cut = (await entries(() => dn.collections.create({ name: wide }))) as Array<{ input: string }>;
+    expect(cut[0]!.input).toBe(`${'\u{20000}'.repeat(64)}...`);
     await dn.collections.create({ name: 'x'.repeat(80) });
     expect(calls).toHaveLength(1);
   });
 
-  it('refuses a reference not 1 to 64 of the allowed characters and a label over 128', async () => {
+  it('refuses a reference not 1 to 64 of the allowed characters and a label empty or over 128', async () => {
     const { dn, calls } = client([{ status: 201, body: ENROLLED }]);
     const enroll = (reference: string, label?: string) => () => dn.collections.enroll(COL, { image: BADGE, reference, label });
-    // The pattern holds the length too, as built: an empty reference fails it.
+    // The length is checked before the pattern: an empty reference is too short.
     const pattern = '^[A-Za-z0-9_.:-]{1,64}$';
     expect(await entries(enroll(''))).toEqual([
-      { type: 'string_pattern_mismatch', loc: ['body', 'reference'], msg: `String should match pattern '${pattern}'`, input: '', ctx: { pattern } },
+      { type: 'string_too_short', loc: ['body', 'reference'], msg: 'String should have at least 1 character', input: '', ctx: { min_length: 1 } },
+    ]);
+    expect(await entries(enroll('emp-1042', ''))).toEqual([
+      { type: 'string_too_short', loc: ['body', 'label'], msg: 'String should have at least 1 character', input: '', ctx: { min_length: 1 } },
+    ]);
+    expect(await entries(() => dn.collections.enroll(COL, { reference: 'emp-1042' } as never))).toEqual([
+      { type: 'missing', loc: ['body', 'image'], msg: 'Field required', input: null },
     ]);
     expect(await entries(() => dn.collections.enroll(COL, { image: BADGE } as never))).toEqual([
       { type: 'missing', loc: ['body', 'reference'], msg: 'Field required', input: null },
     ]);
     const long = 'r'.repeat(65);
     expect(await entries(enroll(long))).toEqual([
-      { type: 'string_too_long', loc: ['body', 'reference'], msg: 'String should have at most 64 characters', input: long, ctx: { max_length: 64 } },
+      {
+        type: 'string_too_long',
+        loc: ['body', 'reference'],
+        msg: 'String should have at most 64 characters',
+        input: `${'r'.repeat(64)}...`,
+        ctx: { max_length: 64 },
+      },
     ]);
     expect(await entries(enroll('emp 1042'))).toEqual([
       {
@@ -237,7 +267,13 @@ describe('collections: local checks', () => {
     ]);
     const label = 'l'.repeat(129);
     expect(await entries(enroll('emp-1042', label))).toEqual([
-      { type: 'string_too_long', loc: ['body', 'label'], msg: 'String should have at most 128 characters', input: label, ctx: { max_length: 128 } },
+      {
+        type: 'string_too_long',
+        loc: ['body', 'label'],
+        msg: 'String should have at most 128 characters',
+        input: `${'l'.repeat(64)}...`,
+        ctx: { max_length: 128 },
+      },
     ]);
     expect(calls).toHaveLength(0);
     await enroll('emp_1.a:b-c', 'l'.repeat(128))();

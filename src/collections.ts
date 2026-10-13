@@ -57,21 +57,37 @@ export interface Deleted {
 const MAX_NAME_CHARS = 80;
 const MAX_REFERENCE_CHARS = 64;
 const MAX_LABEL_CHARS = 128;
-// The pattern holds the length too, as built: an empty reference fails it.
+// Checked after the length, so an empty reference is too short, not off the pattern.
 const REFERENCE_PATTERN = '^[A-Za-z0-9_.:-]{1,64}$';
+// A collections 422 echoes a string cut to 64 characters, then "...".
+const ECHO_CHARS = 64;
 const MAX_LIST_LIMIT = 100;
 
-/** A string field's 422 entries, as the API lists them: missing, not a string, too short, too long, or off its pattern. */
-function stringEntries(loc: string[], value: unknown, least: number, most: number, pattern?: string): Entry[] {
-  if (value === undefined || value === null) return least > 0 ? [entry('missing', loc, 'Field required', null)] : [];
-  if (typeof value !== 'string') return [entry('string_type', loc, 'Input should be a valid string', value)];
-  // Counted in code points, as the API counts them.
+/**
+ * An input as a collections 422 entry echoes it, as the API does: a string cut to 64
+ * characters (code points) with "..." added when it was longer, an object or an array
+ * never (null), anything else as it is.
+ */
+function echoed(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const chars = [...value];
+    return chars.length > ECHO_CHARS ? `${chars.slice(0, ECHO_CHARS).join('')}...` : value;
+  }
+  if (value !== null && typeof value === 'object') return null;
+  return value === undefined ? null : value;
+}
+
+/** A string field's 422 entries, as the API lists them: missing, not a string, empty, too long, or off its pattern. */
+function stringEntries(loc: string[], value: unknown, most: number, pattern?: string): Entry[] {
+  if (value === undefined || value === null) return [entry('missing', loc, 'Field required', null)];
+  if (typeof value !== 'string') return [entry('string_type', loc, 'Input should be a valid string', echoed(value))];
+  // Counted in code points, as the API counts them; the length before the pattern.
   const length = [...value].length;
-  if (length < least) {
-    return [entry('string_too_short', loc, `String should have at least ${least} character${least === 1 ? '' : 's'}`, value, { min_length: least })];
+  if (length === 0) {
+    return [entry('string_too_short', loc, 'String should have at least 1 character', value, { min_length: 1 })];
   }
   if (length > most) {
-    return [entry('string_too_long', loc, `String should have at most ${most} characters`, value, { max_length: most })];
+    return [entry('string_too_long', loc, `String should have at most ${most} characters`, echoed(value), { max_length: most })];
   }
   if (pattern !== undefined && !new RegExp(pattern).test(value)) {
     return [entry('string_pattern_mismatch', loc, `String should match pattern '${pattern}'`, value, { pattern })];
@@ -109,9 +125,9 @@ export class Collections {
     const type = params.type ?? 'face';
     const entries: Entry[] = [];
     if (type !== 'face') {
-      entries.push(entry('literal_error', ['body', 'type'], "Input should be 'face'", type, { expected: "'face'" }));
+      entries.push(entry('literal_error', ['body', 'type'], "Input should be 'face'", echoed(type), { expected: "'face'" }));
     }
-    entries.push(...stringEntries(['body', 'name'], params.name, 1, MAX_NAME_CHARS));
+    entries.push(...stringEntries(['body', 'name'], params.name, MAX_NAME_CHARS));
     if (entries.length > 0) throw localValidation(entries);
     const { body } = await this.#ctx.transport.json({
       method: 'POST',
@@ -156,10 +172,10 @@ export class Collections {
   ): Promise<CollectionItem> {
     const { image, reference, label } = params;
     const entries: Entry[] = [];
-    if (image === undefined || image === null) entries.push(entry('missing', ['body', 'image'], 'Field required', { reference }));
-    if (reference === undefined || reference === null) entries.push(entry('missing', ['body', 'reference'], 'Field required', null));
-    else entries.push(...stringEntries(['body', 'reference'], reference, 0, MAX_REFERENCE_CHARS, REFERENCE_PATTERN));
-    if (label !== undefined && label !== null) entries.push(...stringEntries(['body', 'label'], label, 0, MAX_LABEL_CHARS));
+    if (image === undefined || image === null) entries.push(entry('missing', ['body', 'image'], 'Field required', null));
+    entries.push(...stringEntries(['body', 'reference'], reference, MAX_REFERENCE_CHARS, REFERENCE_PATTERN));
+    // A label's own pattern (no control or invisible character) is the server's to judge.
+    if (label !== undefined && label !== null) entries.push(...stringEntries(['body', 'label'], label, MAX_LABEL_CHARS));
     if (entries.length > 0) throw localValidation(entries);
     const plan = await this.#ctx.placer.planUnchecked(image);
     const { wires } = await this.#ctx.placer.place(plan, options.signal);
