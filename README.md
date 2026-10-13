@@ -1,5 +1,7 @@
 # DecisionNode for TypeScript and JavaScript
 
+[DecisionNode](https://decisionnode.com) is a decision engine: send it text, JSON or images with a question, and it answers with calibrated probabilities.
+
 The official TypeScript and JavaScript client for the [DecisionNode](https://decisionnode.com) API: ask yes-or-no, pick-one, scale and number questions about any text, JSON or image, and get calibrated probabilities back as typed answers. Decide one request at a time, stream readings through a session, or run thousands at half price as a batch.
 
 Runs on Node.js 20.16+, Deno, Bun and edge runtimes. Ships ESM, CommonJS and TypeScript declarations. Its one dependency is optional: `ws`, used only for sessions on Node 20, whose runtime has no WebSocket of its own.
