@@ -47,6 +47,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsup",
+    "prepare": "tsup",
     "test": "vitest run test/unit",
     "test:conformance": "vitest run test/conformance",
     "test:all": "vitest run",

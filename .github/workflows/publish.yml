@@ -64,10 +64,12 @@ jobs:
       - run: npm test
       - run: npm run build
       # The files npm publish sends, packed and checked for names that must not
-      # ship, before the bump is pushed or anything is published.
+      # ship, before the bump is pushed or anything is published. The build above
+      # is the only one: pack and publish skip the prepare script (which builds
+      # for a GitHub install), so the published files are the ones checked here.
       - run: |
           mkdir -p "$RUNNER_TEMP/pack"
-          npm pack --pack-destination "$RUNNER_TEMP/pack"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
           python3 .github/scripts/check_names.py "$RUNNER_TEMP/pack"
 
       - run: |
@@ -79,7 +81,7 @@ jobs:
       # OIDC trusted publishing: npm (>= 11.5) exchanges the workflow id-token
       # for a short-lived, scoped credential, so no NPM_TOKEN is stored. The
       # same step mints the Sigstore provenance shown on npmjs.com.
-      - run: npm publish --provenance --access public
+      - run: npm publish --ignore-scripts --provenance --access public
 
       - run: gh release create "v${{ steps.bump.outputs.version }}" --title "v${{ steps.bump.outputs.version }}" --generate-notes
         env:
