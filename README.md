@@ -546,6 +546,36 @@ Requests are sent as JSON Lines; each line always carries a model (the request's
 
 Creating, adding and finalizing are retried only when the API answers `429` or `529`, since it applied nothing then; never after a timeout or a lost answer, which could create a second draft or add lines twice. A finalize answered `409` because an earlier, lost attempt went through returns the batch.
 
+## Collections
+
+A collection holds faces your workspace enrolls, which the `face_recognition` booster searches. `client.collections` creates, reads and deletes collections and their items; every call returns the API's object as sent.
+
+```ts
+const staff = await dn.collections.create({ name: 'Staff' });
+const item = await dn.collections.enroll(staff.id, {
+  image: Image.fromUrl('badge', 'https://files.example.com/badges/emp-1042.jpg'),
+  reference: 'emp-1042',
+  label: 'Reception',
+  metadata: { department: 'Reception', badge_level: 2, visitor: false },
+});
+
+await dn.collections.updateItem(staff.id, item.id, { label: null, metadata: { department: 'Front desk' } });
+const page = await dn.collections.listItems(staff.id, { reference_prefix: 'emp-' });
+```
+
+| Call | Sends |
+|---|---|
+| `create({ name, type })` | `POST /v1/collections`; `type` is `face`, the default |
+| `list()`, `get(id)`, `delete(id)` | the collections, one collection, its deletion |
+| `enroll(id, { image, reference, label, metadata })` | one face from one image, under your `reference`; the image is sent as a decision sends it |
+| `updateItem(id, itemId, { reference, label, metadata })` | `PATCH` with only the fields given: `label: null` clears the label, and `metadata` replaces the whole object (`{}` empties it) |
+| `listItems(id, { offset, limit, reference, reference_prefix })` | one page of items, filtered by an exact `reference` or a `reference_prefix` (not both); the page carries `total` and `total_capped` |
+| `deleteItem(id, itemId)` | the item's deletion |
+
+`create`, `enroll` and `updateItem` send an `Idempotency-Key`, a new UUID per call and the same on every attempt of it, so the API does the work and bills it once however often the call is tried. They retry like any call, and also on a 409 `idempotency_in_progress` after its `Retry-After`; a 409 `idempotency_key_reused` is thrown and never retried.
+
+Checked before sending, as the API checks them: a `reference` of 1 to 64 of `A-Z a-z 0-9 _ . : -`, a `label` of 1 to 128 characters, and `metadata` as an object of at most 20 keys, each key 1 to 40 of `a-z`, `0-9` and `_`, each value a text of at most 500 characters, a number or true or false. Of an enrolled image only a URL is checked here; every other fault of the picture is the API's 422 `image_unreadable`.
+
 ## Errors
 
 Every error is a `DecisionNodeError`, exported under that name, with `status`, `errorType`, `requestId` and `reason` (the API's explanation in words, from the `x-decisionnode-error` header). `message` is the API's own message exactly as sent, and empty when the response carried none; when no response arrived, it describes what went wrong.
@@ -568,6 +598,8 @@ Every error is a `DecisionNodeError`, exported under that name, with `status`, `
 The service's edge or a proxy may answer with a page of its own instead of the API's JSON error (a 408 for an upload that stalls, a 413 for a body far over the limit, a 502). Such an error is classed by its status alone, as in the table (a 400 is a `BadRequestError`, never a `ContextLimitError`; a 403 a `PermissionDeniedError`, never a `RefusalError`; a 422 a `ValidationError` with no `entries`), with `errorType` `null`, `requestId` and `reason` from the headers when sent, and the client's own `message`: `HTTP <status> <text>`, then the request id when there is one, for example `HTTP 413 Content Too Large` or `HTTP 408 Request Timeout (request id req_...)`. The page itself is never read into the error. Retries are the same as for any body: a 408 is retried, a 413 never.
 
 Every error also has `boosters`: for a request that named boosters, each booster's status and time from the `x-decisionnode-boosters` header (see "Boosters"); an empty object otherwise.
+
+Every error also has `details`: the error body's `detail.details` when it is an object, for example `{ reason: 'enrollment_unpriced' }` on an enrollment's 529, which is never retried; `null` otherwise.
 
 A failed upload to storage is a `DecisionNodeError` with the storage's status, `errorType` `upload_failed`, and the storage's error code in `reason`. Batch errors with their own `errorType` (`batch_limit_exceeded`, `invalid_batch_state`, `results_not_ready`, `results_expired`) use the classes above by status.
 

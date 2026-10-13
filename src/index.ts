@@ -110,6 +110,7 @@ export {
   type CollectionItem,
   type CollectionItemPage,
   type CollectionsContext,
+  type ItemMetadata,
   type Deleted,
 } from './collections.js';
 export {

@@ -9,6 +9,7 @@ import {
   DecisionNodeError,
   ServerError,
   TimeoutError,
+  detailsOf,
   errorFromResponse,
   retryAfterSeconds,
 } from './errors.js';
@@ -221,6 +222,16 @@ function nowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
+/** `detail.details.reason` of an error body, when it has one. */
+function detailReasonOf(text: string): string | null {
+  try {
+    const reason = detailsOf(JSON.parse(text))?.reason;
+    return typeof reason === 'string' ? reason : null;
+  } catch {
+    return null;
+  }
+}
+
 function errorTypeOf(text: string): string | null {
   try {
     const detail = (JSON.parse(text) as { detail?: unknown })?.detail;
@@ -327,6 +338,8 @@ export class Transport {
       if (policy === 'idempotent' && res.status === 409 && errorTypeOf(res.text) === 'idempotency_in_progress') {
         retryable = true;
       }
+      // An enrollment with no price set: a retry never cures it, and it sends no Retry-After.
+      if (res.status === 529 && detailReasonOf(res.text) === 'enrollment_unpriced') retryable = false;
       if (retryable && attempt < this.maxRetries) {
         const wait = retryAfterSeconds(res.headers) ?? backoffSeconds(attempt);
         await this.sleep(wait * 1000, signal);

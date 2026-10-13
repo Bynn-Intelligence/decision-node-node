@@ -43,6 +43,11 @@ export class DecisionNodeError extends Error {
    * can see which required booster failed. Empty when the header is absent.
    */
   readonly boosters: Record<string, BoosterStatus>;
+  /**
+   * `detail.details` from the error body when it is an object, for example
+   * `{ reason: 'enrollment_unpriced' }` on an enrollment's 529; `null` otherwise.
+   */
+  readonly details: Record<string, unknown> | null;
 
   constructor(message: string, fields: ErrorFields = {}) {
     super(message, fields.cause === undefined ? undefined : { cause: fields.cause });
@@ -53,7 +58,19 @@ export class DecisionNodeError extends Error {
     this.body = fields.body;
     this.headers = fields.headers ?? {};
     this.boosters = parseBoostersHeader(this.headers['x-decisionnode-boosters']);
+    this.details = detailsOf(this.body);
   }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/** `detail.details` of an error body, when the detail and its details are both objects. */
+export function detailsOf(body: unknown): Record<string, unknown> | null {
+  const detail = isPlainObject(body) ? body.detail : undefined;
+  const details = isPlainObject(detail) ? detail.details : undefined;
+  return isPlainObject(details) ? details : null;
 }
 
 /** 400. */

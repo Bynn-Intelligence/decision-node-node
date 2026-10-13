@@ -317,6 +317,7 @@ function normError(e: DecisionNodeError): Json {
     entries: e instanceof ValidationError ? e.entries : null,
     retry_after: e instanceof RateLimitError || e instanceof OverloadedError ? e.retryAfter : null,
     boosters: normBoosters(e.boosters),
+    details: e.details,
   };
 }
 
@@ -595,12 +596,21 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
     case 'collections.enroll': {
       const p: Json = { image: decode(args.image, ctx), reference: decode(args.reference, ctx) };
       if ('label' in args) p.label = decode(args.label, ctx);
+      if ('metadata' in args) p.metadata = decode(args.metadata, ctx);
       return client.collections.enroll(decode(args.collection_id, ctx), p);
+    }
+    case 'collections.update_item': {
+      // Only the fields the case gives; a label given as null clears it.
+      const p: Json = {};
+      for (const k of ['reference', 'label', 'metadata']) if (k in args) p[k] = decode(args[k], ctx);
+      return client.collections.updateItem(decode(args.collection_id, ctx), decode(args.item_id, ctx), p);
     }
     case 'collections.list_items': {
       const p: Json = {};
       if ('offset' in args) p.offset = args.offset;
       if ('limit' in args) p.limit = args.limit;
+      if ('reference' in args) p.reference = decode(args.reference, ctx);
+      if ('reference_prefix' in args) p.reference_prefix = decode(args.reference_prefix, ctx);
       return client.collections.listItems(decode(args.collection_id, ctx), p);
     }
     case 'collections.delete_item':
