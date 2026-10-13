@@ -245,6 +245,7 @@ function normReading(r: Reading): Json {
       kind: 'face_recognition',
       image: r.image,
       faces: r.faces,
+      collection_name: r.collectionName,
       matches: r.matches.map((m) => ({
         box: normBox(m.box),
         score: m.score,
@@ -252,6 +253,8 @@ function normReading(r: Reading): Json {
         reference: m.reference,
         name: m.name,
         label: m.label,
+        collection_name: m.collectionName,
+        metadata: m.metadata,
       })),
     };
   }

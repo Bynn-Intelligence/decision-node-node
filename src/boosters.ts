@@ -264,6 +264,13 @@ export interface FaceMatch {
   name: string | null;
   /** The matched item's label, when it has one; `null` otherwise. */
   label: string | null;
+  /**
+   * The collection's name: an own collection's display name or its id, a
+   * public collection's id; `null` when the answer does not carry it.
+   */
+  collectionName: string | null;
+  /** The matched item's metadata, as sent; `null` when it has none, never `{}`. */
+  metadata: Record<string, unknown> | null;
 }
 
 function isFaceBox(v: unknown): v is FaceBox {
@@ -321,6 +328,8 @@ export class FaceRecognitionReading {
   readonly faces: number;
   /** The faces that match, by score, in the order sent; empty when none does. */
   readonly matches: FaceMatch[];
+  /** An own collection's display name; `null` for a public collection or when not sent. */
+  readonly collectionName: string | null;
   /** The reading as received. */
   readonly raw: Record<string, unknown>;
 
@@ -328,6 +337,7 @@ export class FaceRecognitionReading {
     this.raw = raw;
     this.image = raw.image as string;
     this.faces = raw.faces as number;
+    this.collectionName = (raw.collection_name ?? null) as string | null;
     this.matches = (raw.matches as Record<string, unknown>[]).map((m) => ({
       box: faceBox(m.box as Record<string, unknown>),
       score: m.score as number,
@@ -335,12 +345,15 @@ export class FaceRecognitionReading {
       reference: m.reference as string,
       name: (m.name ?? null) as string | null,
       label: (m.label ?? null) as string | null,
+      collectionName: (m.collection_name ?? null) as string | null,
+      metadata: (m.metadata ?? null) as Record<string, unknown> | null,
     }));
   }
 
   static wellFormed(r: Record<string, unknown>): boolean {
     if (typeof r.image !== 'string' || !isFaceCount(r.faces) || !Array.isArray(r.matches)) return false;
     const optionalString = (v: unknown) => absent(v) || typeof v === 'string';
+    if (!optionalString(r.collection_name)) return false;
     return r.matches.every(
       (m: unknown) =>
         isObject(m) &&
@@ -349,7 +362,9 @@ export class FaceRecognitionReading {
         typeof m.collection === 'string' &&
         typeof m.reference === 'string' &&
         optionalString(m.name) &&
-        optionalString(m.label),
+        optionalString(m.label) &&
+        optionalString(m.collection_name) &&
+        (absent(m.metadata) || isObject(m.metadata)),
     );
   }
 }

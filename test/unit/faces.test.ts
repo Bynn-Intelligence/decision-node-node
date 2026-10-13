@@ -90,11 +90,38 @@ describe('face_recognition readings', () => {
     expect([gate!.faces, gate!.matches]).toEqual([
       3,
       [
-        { box, score: 0.91, collection: 'col_1', reference: 'emp-1042', name: null, label: 'Reception' },
-        { box, score: 0.88, collection: 'celebrities', reference: 'cel-7', name: 'Example Person', label: null },
+        { box, score: 0.91, collection: 'col_1', reference: 'emp-1042', name: null, label: 'Reception', collectionName: null, metadata: null },
+        { box, score: 0.88, collection: 'celebrities', reference: 'cel-7', name: 'Example Person', label: null, collectionName: null, metadata: null },
       ],
     ]);
     expect([lobby!.faces, lobby!.matches]).toEqual([2, []]);
+  });
+
+  it('reads the collection name and each match metadata, null when absent', () => {
+    const box = { x1: 5, y1: 6, x2: 50, y2: 60 };
+    const metadata = { department: 'Reception', badge: 1042, active: true };
+    const d = evidence('face_recognition', [
+      {
+        image: 'gate',
+        faces: 2,
+        collection_name: 'Staff',
+        matches: [
+          { box, score: 0.91, collection: 'col_1', reference: 'emp-1042', collection_name: 'Staff', metadata },
+          { box, score: 0.88, collection: 'col_1', reference: 'emp-7', collection_name: null, metadata: null },
+        ],
+      },
+      { image: 'lobby', faces: 1, matches: [{ box, score: 0.8, collection: 'celebrities', reference: 'cel-7' }] },
+    ]);
+    const [gate, lobby] = d.evidence!.face_recognition!.results as FaceRecognitionReading[];
+    expect(gate).toBeInstanceOf(FaceRecognitionReading);
+    expect(gate!.collectionName).toBe('Staff');
+    expect(gate!.matches.map((m) => [m.collectionName, m.metadata])).toEqual([
+      ['Staff', metadata],
+      [null, null],
+    ]);
+    expect(lobby).toBeInstanceOf(FaceRecognitionReading);
+    expect(lobby!.collectionName).toBeNull();
+    expect([lobby!.matches[0]!.collectionName, lobby!.matches[0]!.metadata]).toEqual([null, null]);
   });
 
   it('reads a malformed reading as generic', () => {
@@ -112,6 +139,10 @@ describe('face_recognition readings', () => {
       { image: 'i', faces: 1, matches: [{ ...m, score: true }] },
       { image: 'j', faces: 1, matches: [{ ...m, box: 'x' }] },
       { image: 'k', faces: '1', matches: [] },
+      { image: 'l', faces: 1, collection_name: 7, matches: [] },
+      { image: 'm', faces: 1, matches: [{ ...m, collection_name: ['Staff'] }] },
+      { image: 'n', faces: 1, matches: [{ ...m, metadata: 'x' }] },
+      { image: 'o', faces: 1, matches: [{ ...m, metadata: [] }] },
     ]);
     expect(d.evidence!.face_recognition!.results.every((r) => r instanceof UnknownReading)).toBe(true);
   });
