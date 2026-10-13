@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 env:
-  # The conformance suite commit this SDK targets (suite 1.12). Moving to a newer
+  # The conformance suite commit this SDK targets (suite 1.13, tag v1.13). Moving to a newer
   # suite is a reviewed change to this one line.
-  CONFORMANCE_REF: 5f996eabc796c15d97655169dff7c8082e8a5d48
+  CONFORMANCE_REF: ede3f8b03d85111ca61085df5aa7a306ab5ec943
 
 jobs:
   test:
@@ -30,7 +30,6 @@ jobs:
         with:
           repository: Bynn-Intelligence/decision-node-conformance
           ref: ${{ env.CONFORMANCE_REF }}
-          token: ${{ secrets.DECISIONNODE_CONFORMANCE_TOKEN }}
           path: conformance
           persist-credentials: false
 
@@ -71,7 +70,6 @@ jobs:
         with:
           repository: Bynn-Intelligence/decision-node-conformance
           ref: ${{ env.CONFORMANCE_REF }}
-          token: ${{ secrets.DECISIONNODE_CONFORMANCE_TOKEN }}
           path: conformance
           persist-credentials: false
 
