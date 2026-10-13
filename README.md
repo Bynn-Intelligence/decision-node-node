@@ -9,7 +9,7 @@ Runs on Node.js 20.16+, Deno, Bun and edge runtimes. Ships ESM, CommonJS and Typ
 From npm, once the package is published there:
 
 ```sh
-npm install @bynn/decisionnode
+npm install @decisionnode/sdk
 ```
 
 From GitHub, which works today:
@@ -18,7 +18,7 @@ From GitHub, which works today:
 npm install github:Bynn-Intelligence/decision-node-node
 ```
 
-The GitHub install builds the package on your machine as it installs, and you import it by the same name, `@bynn/decisionnode`.
+The GitHub install builds the package on your machine as it installs, and you import it by the same name, `@decisionnode/sdk`.
 
 ## Set your key
 
@@ -29,7 +29,7 @@ export DECISIONNODE_API_KEY="your-api-key"
 ## Quickstart
 
 ```ts
-import { DecisionNode, choice, number, score, truth } from '@bynn/decisionnode';
+import { DecisionNode, choice, number, score, truth } from '@decisionnode/sdk';
 
 const dn = new DecisionNode(); // reads DECISIONNODE_API_KEY
 
@@ -91,7 +91,7 @@ Answers are read by question id. Question ids and option names are sent and retu
 Send an image by URL when you can. It is the fastest input: nothing is uploaded, the request stays small, and the API fetches the image while it reads the rest of the request.
 
 ```ts
-import { Image } from '@bynn/decisionnode';
+import { Image } from '@decisionnode/sdk';
 
 const d = await dn.decide({
   state: { claim: { total: '740.00', currency: 'SEK' } },
@@ -147,7 +147,7 @@ const d = await dn.decide({
 A `point` question finds one spot in an image; a `box` question draws a rectangle around something. They mix freely with the other types in one request, and several of them on the same image share one read of it.
 
 ```ts
-import { Image, box, point, truth } from '@bynn/decisionnode';
+import { Image, box, point, truth } from '@decisionnode/sdk';
 
 const d = await dn.decide({
   images: [Image.fromUrl('belt', 'https://files.example.com/line-3/cam-2/0917.jpg')],
@@ -183,7 +183,7 @@ A point or box question needs an image in the request. With two or more images, 
 A video is sent as the frames you sampled, each with its time in seconds, and the questions see them as one video, in order and with their times. Only frames are sent: no video file, no video URL and no sound go to the API.
 
 ```ts
-import { Video, VideoFrame, number, truth } from '@bynn/decisionnode';
+import { Video, VideoFrame, number, truth } from '@decisionnode/sdk';
 
 // cameraFrames: [seconds, JPEG bytes] pairs you already hold
 const frames = cameraFrames.map(([t, jpeg]) => new VideoFrame(t, jpeg));
@@ -221,7 +221,7 @@ A booster is a specialist model that reads the request's images before the decis
 | `ai_generated` | Any picture | How likely the picture was made by an image generator, which generator most likely, and whether the file carries Content Credentials (C2PA) and who signed them |
 
 ```ts
-import { AgeReading, Image, truth } from '@bynn/decisionnode';
+import { AgeReading, Image, truth } from '@decisionnode/sdk';
 
 const d = await dn.decide({
   images: [
@@ -252,7 +252,7 @@ d.usage.boosters;                     // the booster calls billed
 `boosters` takes up to 4 booster names, each named once, in the order you give. A booster that needs a setting is a `Booster`. Here `ai_generated` reads only the second picture, and the request fails if it cannot:
 
 ```ts
-import { Booster } from '@bynn/decisionnode';
+import { Booster } from '@decisionnode/sdk';
 
 await dn.decide({
   images,
@@ -574,7 +574,7 @@ Only 200 to 299 is a success. Redirects are never followed, so your key is never
 Problems with your own arguments are not `DecisionNodeError`s: they throw JavaScript's own `TypeError` or `RangeError` (an empty question map, a bad base URL, timeout, `maxRetries` or `inlineThreshold`, a `concurrency` below 1, a malformed request in `decideMany` or a batch, a `pollInterval` below 10 seconds, a `fetch` without `fetchHonoursManualRedirect: true`, TLS checks turned off for an `https` base URL, an image file that cannot be read, a value that cannot be serialised as JSON). A request the API would refuse is not an argument problem: it throws the API's own error class (see "Checked before sending").
 
 ```ts
-import { ContextLimitError, DecisionNodeError, RefusalError } from '@bynn/decisionnode';
+import { ContextLimitError, DecisionNodeError, RefusalError } from '@decisionnode/sdk';
 
 try {
   await dn.decide({ state, questions });

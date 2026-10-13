@@ -4,6 +4,7 @@
 
 Implements version 1.3 of the DecisionNode SDK specification (`SPEC_VERSION` is `"1.3"`).
 
+- The package is `@decisionnode/sdk` (it was `@bynn/decisionnode`): `npm install @decisionnode/sdk` and `import { DecisionNode } from '@decisionnode/sdk'`. An install from GitHub installs under the same name.
 - The default model is `decisionnode-moe` (it was `decisionnode-latest`), and the docs and examples use the family ids `decisionnode-moe` and `decisionnode-flash`, which always mean the current release. A pinned release is `decisionnode-<family>-<version>`, as `models()` lists it. The older ids (`decisionnode-1.0`, `decisionnode-1.0-flash`, `decisionnode-latest`, `decisionnode-flash-latest`) are still accepted by the API and sent as given.
 
 - Boosters: `boosters` on `decide`, `check`, `classify`, `score`, `number`, `gate`, `decideMany` requests, batch requests and `checkRequest`, as names (`'age'`), `new Booster(name, { images, require, options })` (sent as `{ name, ... }`, or as the bare name when no setting is given) or the API's own objects, sent in order; each setting is left out of the request when not given, and no `boosters` field is sent when none (or an empty list) are given. `BoosterName` offers `'age'` and `'ai_generated'` and takes any other string. Nothing about boosters is checked before sending; a booster's `options` count toward the request's nesting limit. Sessions take no boosters.

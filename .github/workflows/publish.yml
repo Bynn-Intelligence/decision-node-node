@@ -2,7 +2,7 @@
 # The one other change from the copied workflow: the packed files are checked
 # for names that must not ship before anything is pushed or published.
 #
-# Auto-release @bynn/decisionnode on every push to main: bump the patch, keep
+# Auto-release @decisionnode/sdk on every push to main: bump the patch, keep
 # the in-code version string (src/version.ts) in step, run the checks,
 # publish to npm with provenance, push the bump commit and tag back to main,
 # and cut the GitHub release. The push back uses the default GITHUB_TOKEN,
