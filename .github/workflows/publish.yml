@@ -70,7 +70,9 @@ jobs:
       - run: |
           mkdir -p "$RUNNER_TEMP/pack"
           npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/pack"
-          python3 .github/scripts/check_names.py "$RUNNER_TEMP/pack"
+          python3 .github/scripts/check_names.py --commits "$RUNNER_TEMP/pack"
+        env:
+          DN_NAME_CHECK_WORDS: ${{ secrets.DN_NAME_CHECK_WORDS }}
 
       - run: |
           git add package.json package-lock.json src/version.ts
