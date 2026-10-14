@@ -1,5 +1,7 @@
 /**
- * The Batch API: many decide requests run at half price within 24 hours.
+ * The Batch API: many decide requests run at the batch price. No time is set
+ * for a batch to run or finish; requests not answered within 24 hours of
+ * finalizing expire and are not charged.
  * Lines go up as JSON Lines; results come back as JSON Lines in upload order.
  */
 import { Decision } from './answers.js';
@@ -27,7 +29,7 @@ export const MAX_BATCH_ADD_BYTES = 10_485_760;
 export const MIN_POLL_INTERVAL = 10_000;
 /** The default `pollInterval` of `runBatch`: 60 seconds. */
 export const DEFAULT_POLL_INTERVAL = 60_000;
-/** The default `timeout` of `runBatch`: 26 hours, past a batch's 24-hour window. */
+/** The default `timeout` of `runBatch`: 26 hours, past the 24 hours after finalizing at which a batch's unanswered requests expire. */
 export const DEFAULT_BATCH_TIMEOUT = 26 * 3600 * 1000;
 
 const NDJSON = 'application/x-ndjson';
