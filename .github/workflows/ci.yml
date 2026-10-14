@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 env:
-  # The conformance suite commit this SDK targets (suite 1.17, tag v1.17). Moving to a newer
+  # The conformance suite commit this SDK targets (suite 1.19, tag v1.19). Moving to a newer
   # suite is a reviewed change to this one line.
-  CONFORMANCE_REF: 23957bf6992fa53918a9f63ab16c8a6c8b9203f9
+  CONFORMANCE_REF: 75838a478b30e00089afbb2bfc1ff99e6052b658
 
 jobs:
   test:

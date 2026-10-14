@@ -28,6 +28,8 @@ The GitHub install builds the package on your machine as it installs, and you im
 export DECISIONNODE_API_KEY="your-api-key"
 ```
 
+A key's kind decides what it may call: Full access for your servers, Decisions only for a device or a service that only decides, Manage device keys for the server that hands out device keys, and Publishable for a web page or an app. See [API keys](https://decisionnode.com/docs/concepts/keys).
+
 ## Quickstart
 
 ```ts
@@ -576,6 +578,63 @@ const page = await dn.collections.listItems(staff.id, { reference_prefix: 'emp-'
 
 Checked before sending, as the API checks them: a `reference` of 1 to 64 of `A-Z a-z 0-9 _ . : -`, a `label` of 1 to 128 characters, and `metadata` as an object of at most 20 keys, each key 1 to 40 of `a-z`, `0-9` and `_`, each value a text of at most 500 characters, a number or true or false. Of an enrolled image only a URL is checked here; every other fault of the picture is the API's 422 `image_unreadable`.
 
+## Device keys
+
+A Manage device keys key, kept on your provisioning server, makes a Decisions-only key for each device as it enrolls, and changes or revokes it later. `client.keys` returns the API's object as sent.
+
+```ts
+const admin = new DecisionNode({ apiKey: process.env.DECISIONNODE_MANAGE_KEY });
+
+const { key, secret } = await admin.keys.create({
+  name: 'Kiosk 0412',
+  deviceId: 'kiosk-0412',
+  labels: { store: '118', fw: '2.4' },
+  limits: { requests_per_second: 5, tokens_per_second: 20000 },
+  dailySpendCap: { usd: 2.0 },
+  idempotencyKey: 'enroll-kiosk-0412', // a retried enrollment gets the same key back
+});
+// Hand `secret` to the device once; never log it.
+
+await admin.keys.update(key.id, { labels: { store: '120' } });
+while ((await admin.keys.revokeByLabels({ store: '118' })).more) {
+  // more keys match: call again until `more` is false
+}
+```
+
+| Call | Sends |
+|---|---|
+| `create({ name, deviceId, labels, limits, dailySpendCap, expiresAt, maySearchCollections, idempotencyKey })` | `POST /v1/keys`, each field only when given: `{ key, secret }`, the secret shown only here |
+| `list({ labels, deviceId, status, limit, cursor })` | one page of keys, newest first: `{ items, next_cursor }`. `labels` keeps the keys with all of them; `status` is `active` (the default), `expired`, `revoked` or `all`; `limit` 1 to 200 |
+| `all({ labels, deviceId, status, limit })` | every key `list` finds, its pages followed to the end |
+| `update(keyId, { name, labels, limits, dailySpendCap, expiresAt, maySearchCollections })` | `PATCH` with only the fields given: `labels` replaces the whole set, and `null` clears `labels`, `limits`, `dailySpendCap` or `expiresAt`. A key's device id never changes |
+| `revoke(keyId)` | `DELETE`: the key is revoked at once |
+| `revokeByLabels(labels, { deviceIds, dryRun })` | every active key with all of `labels`, at most 10,000 a call: `{ revoked, more }`; call again while `more` is true. `dryRun: true` counts them instead: `{ would_revoke, more }` |
+
+`create` sends an `Idempotency-Key`: yours when you pass `idempotencyKey` (one per enrollment), else a new UUID per call, the same on every attempt, so a retried call makes one key. A retry with the same key and body within 24 hours returns the same key and secret. A label filter, a device id, a `status` and a `limit` are checked before anything is sent, as the API checks them, and so is an `update` with nothing to change. The whole flow is in [Keys on devices](https://decisionnode.com/docs/patterns/device-keys).
+
+## Per-key usage
+
+What each key used and cost over a period: a Full access key reads every key of its workspace, a Manage device keys key its Decisions-only keys. `client.usage` returns the API's object as sent.
+
+```ts
+const one = await dn.usage.key('key_7c2e9a41b0d34f6e8a5c1d2b3e4f5a60', { granularity: 'day' });
+const items = await dn.usage.all({
+  start: '2026-10-01T00:00:00Z',
+  end: '2026-11-01T00:00:00Z',
+  labels: { customer: 'acme' },
+  status: 'all',
+});
+for (const item of items) console.log(item.key, item.totals);
+```
+
+| Call | Sends |
+|---|---|
+| `key(keyId, { start, end, granularity, groupBy })` | `GET /v1/keys/{key_id}/usage`; without `start` and `end`, the UTC month so far |
+| `list({ start, end, granularity, groupBy, labels, deviceId, keyIds, scope, status, includeEmpty, limit, cursor })` | `GET /v1/usage`, one page of every key's usage: `{ period, as_of, items, next_cursor }`; pass `next_cursor` as `cursor` until it is `null` |
+| `all({ start, end, ... })` | `list`'s parameters but `cursor`: every page's `items`, in order |
+
+`start` and `end` are RFC 3339 times, rounded to the hour. `granularity` (`none`, `hour`, `day` or `month`) adds `buckets`, and `groupBy` (`model` or `channel`) `by_model` or `by_channel`. `labels` keeps the keys with all of them, `keyIds` (at most 100) the keys named, `scope` (`full`, `decide` or `keys`) and `status` (`active`, `expired`, `revoked` or `all`) the keys of that kind or state; `includeEmpty: true` lists keys with no usage too; `limit` is 1 to 1,000. A page can hold fewer keys than `limit`, so only `next_cursor` says when the list is done: `all` follows it for you. These query rules are checked before anything is sent, with the API's messages; the period's own rules are the server's. See [Usage](https://decisionnode.com/docs/api/usage).
+
 ## Errors
 
 Every error is a `DecisionNodeError`, exported under that name, with `status`, `errorType`, `requestId` and `reason` (the API's explanation in words, from the `x-decisionnode-error` header). `message` is the API's own message exactly as sent, and empty when the response carried none; when no response arrived, it describes what went wrong.
@@ -585,11 +644,11 @@ Every error is a `DecisionNodeError`, exported under that name, with `status`, `
 | 400 | `BadRequestError`; `ContextLimitError` when the request is over the model's token limit | |
 | 401 | `AuthenticationError` (also thrown before sending when no key is set) | |
 | 402 | `InsufficientCreditError` | |
-| 403 | `RefusalError` when the request was refused under the usage policy (`category`, `safety`); every other 403 is a `PermissionDeniedError`: a booster turned off for your workspace (`booster_not_enabled`) or a suspended workspace, told apart by `errorType` | `category`, `safety` on a `RefusalError` |
+| 403 | `RefusalError` when the request was refused under the usage policy (`category`, `safety`); every other 403 is a `PermissionDeniedError`: a booster turned off for your workspace (`booster_not_enabled`), a suspended workspace, or a call outside the key's kind (`key_scope_denied`); for a publishable key also `origin_not_allowed` and `model_not_allowed`, its models in `details.allowed`; told apart by `errorType` | `category`, `safety` on a `RefusalError` |
 | 404 | `NotFoundError` | |
 | 413 | `RequestTooLargeError`: the body is over 25 MiB; never retried. Send large images as uploads | |
 | 422 | `ValidationError` | `entries` |
-| 429 | `RateLimitError`; `SessionLimitError` when the key holds as many sessions as it may | `retryAfter` (seconds, at most 60) |
+| 429 | `RateLimitError`; `SessionLimitError` when the key holds as many sessions as it may; `errorType` `key_spend_cap_reached` for a key past its daily spend cap, with `details` `resets_at`, `cap` and `spent`; a publishable key's per-address rate and calls in flight with `details.reason` `client_rate` or `in_flight` | `retryAfter` (seconds, at most 60) |
 | 529 | `OverloadedError`, also when a required booster failed (`booster_unavailable`) | `retryAfter` (seconds, at most 60) |
 | other 5xx, a 2xx whose body is not JSON, or a helper's own answer missing or malformed | `ServerError` | |
 | no response | `ConnectionError`, `TimeoutError` | |
@@ -622,7 +681,7 @@ try {
 
 ### Retries and timeouts
 
-Each attempt times out after 10 seconds (30 seconds for a request whose boosters name `ocr`, unless you set `timeout`), counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors, except that a decision naming `ocr` is never retried after a timeout (see Boosters). The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404, 413 and 422 are never retried. A decision changes nothing on the server, so a retry is otherwise safe.
+Each attempt times out after 10 seconds (30 seconds for a request whose boosters name `ocr`, unless you set `timeout`), counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors, except that a decision naming `ocr` is never retried after a timeout (see Boosters). The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404, 413 and 422 are never retried, and neither is a 429 `key_spend_cap_reached`: the key's cap resets at 00:00 UTC, so it is thrown at once. A decision changes nothing on the server, so a retry is otherwise safe.
 
 Each storage PUT of an upload has its own timeout, `uploadTimeout` (60 seconds by default), apart from `timeout`, since a large image on a slow uplink needs longer than a decision. It is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. A `403` after the upload URL's 5 minutes have passed, by the client's clock, gets a fresh URL once; a second such `403` is thrown. Batch results stream in, and each read of the stream must bring data within the timeout.
 

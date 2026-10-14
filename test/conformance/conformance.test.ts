@@ -497,6 +497,34 @@ function decideParams(args: Json, ctx: Json): Json {
   return p;
 }
 
+// The usage calls' arguments (suite 1.18) under the SDK's names, each passed only when the case gives it.
+const USAGE_ARGS: Record<string, string> = {
+  start: 'start',
+  end: 'end',
+  granularity: 'granularity',
+  group_by: 'groupBy',
+  labels: 'labels',
+  device_id: 'deviceId',
+  key_ids: 'keyIds',
+  scope: 'scope',
+  status: 'status',
+  include_empty: 'includeEmpty',
+  limit: 'limit',
+  cursor: 'cursor',
+};
+
+function usageParams(args: Json, ctx: Json): Json {
+  const p: Json = {};
+  for (const [neutral, name] of Object.entries(USAGE_ARGS)) if (neutral in args) p[name] = decode(args[neutral], ctx);
+  return p;
+}
+
+function usagePeriod(args: Json, ctx: Json): Json {
+  const p: Json = {};
+  for (const neutral of ['start', 'end', 'granularity', 'group_by']) if (neutral in args) p[USAGE_ARGS[neutral]] = decode(args[neutral], ctx);
+  return p;
+}
+
 function batchRequests(list: Json, ctx: Json): Json[] {
   const items: Json[] = Array.isArray(list) ? list : decode(list, ctx);
   return items.map(({ custom_id, ...rest }: Json) => ({ customId: custom_id, ...decideParams(rest, ctx) }));
@@ -636,6 +664,12 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
     }
     case 'collections.delete_item':
       return client.collections.deleteItem(decode(args.collection_id, ctx), decode(args.item_id, ctx));
+    case 'usage.key':
+      return client.usage.key(decode(args.key_id, ctx), usagePeriod(args, ctx));
+    case 'usage.list':
+      return client.usage.list(usageParams(args, ctx));
+    case 'usage.all':
+      return client.usage.all(usageParams(args, ctx));
     default:
       throw new Error(`unknown method ${method}`);
   }
@@ -758,6 +792,12 @@ function checkRequest(exp: Json, got: Json, where: string): void {
   if ('query' in exp) {
     const q = Object.fromEntries(new URLSearchParams(got.query ?? ''));
     if (!same(exp.query, q)) throw new Error(`${where} query: expected ${short(exp.query)}, got ${short(q)}`);
+  }
+  if ('query_all' in exp) {
+    // Suite 1.18: every value of each parameter, a repeated one in its order.
+    const every: Json = {};
+    for (const [k, v] of new URLSearchParams(got.query ?? '')) (every[k] ??= []).push(v);
+    if (!same(exp.query_all, every)) throw new Error(`${where} query: expected ${short(exp.query_all)}, got ${short(every)}`);
   }
   if ('status' in exp && got.status !== exp.status) throw new Error(`${where} status: the mock answered ${got.status}, expected ${exp.status}`);
   for (const [name, value] of Object.entries(exp.headers ?? {})) {
@@ -906,15 +946,17 @@ function checkBatchResult(spec: Json, r: BatchResult, where: string): void {
   if (spec.no_decision && r.decision !== null) throw new Error(`${where}: expected no decision`);
 }
 
-// The collections calls' results (suite 1.13), each the API's object as sent;
-// `collections` is the list, compared in order and by length.
-const COLLECTION_KINDS = ['collection', 'collections', 'item', 'item_page', 'deleted'];
+// The collections calls' results (suite 1.13) and the usage calls' (1.18), each
+// the API's object as sent; `collections` and `usage_items` are lists, compared
+// in order and by length.
+const COLLECTION_KINDS = ['collection', 'collections', 'item', 'item_page', 'deleted', 'key_usage', 'usage_page', 'usage_items'];
+const LIST_KINDS = ['collections', 'usage_items'];
 
 function checkCollectionResult(kind: string, expected: Json, result: Json, path: string): void {
-  if (kind === 'collections') {
-    if (!Array.isArray(result)) throw new Error(`${path}: expected a list of collections, got ${short(result)}`);
+  if (LIST_KINDS.includes(kind)) {
+    if (!Array.isArray(result)) throw new Error(`${path}: expected a list, got ${short(result)}`);
     if (expected === undefined) return;
-    if (expected.length !== result.length) throw new Error(`${path}: expected ${expected.length} collections, got ${result.length}`);
+    if (expected.length !== result.length) throw new Error(`${path}: expected ${expected.length} entries, got ${result.length}`);
     expected.forEach((e: Json, i: number) => match(e, result[i], `${path}[${i}]`));
     return;
   }
@@ -1053,7 +1095,10 @@ async function checkOutcome(spec: Json, result: unknown, path: string): Promise<
     case 'item':
     case 'item_page':
     case 'deleted':
-      checkCollectionResult(spec.result, spec[spec.result] ?? (spec.result === 'collections' ? undefined : {}), r, `${path}.${spec.result}`);
+    case 'key_usage':
+    case 'usage_page':
+    case 'usage_items':
+      checkCollectionResult(spec.result, spec[spec.result] ?? (LIST_KINDS.includes(spec.result) ? undefined : {}), r, `${path}.${spec.result}`);
       return;
     case 'session':
       if (!(r instanceof Session)) throw new Error(`${path}: expected a Session, got ${short(r)}`);
@@ -1165,7 +1210,7 @@ function checkSequence(expected: Json[], log: Json[]): void {
     if ('path' in spec && rec.path !== spec.path) throw new Error(`request sequence[${i}]: expected ${spec.method} ${spec.path}, got ${got[i]}`);
     if ('path_pattern' in spec && !new RegExp(spec.path_pattern).test(rec.path)) throw new Error(`request sequence[${i}]: ${got[i]} does not match ${spec.path_pattern}`);
     if ('status' in spec && rec.status !== spec.status) throw new Error(`request sequence[${i}]: ${got[i]} answered ${rec.status}, expected ${spec.status}`);
-    const keys = ['headers', 'header_patterns', 'absent_headers', 'body_checks', 'jsonl_count', 'jsonl_checks', 'body_base64', 'body_sha256', 'query'];
+    const keys = ['headers', 'header_patterns', 'absent_headers', 'body_checks', 'jsonl_count', 'jsonl_checks', 'body_base64', 'body_sha256', 'query', 'query_all'];
     const checks = Object.fromEntries(Object.entries(spec).filter(([k]) => keys.includes(k)));
     if (Object.keys(checks).length > 0) checkRequest({ ...checks, method: spec.method, any_body: true }, rec, `request sequence[${i}]`);
   });

@@ -114,6 +114,24 @@ export {
   type Deleted,
 } from './collections.js';
 export {
+  Keys,
+  PerKeyUsage,
+  type ApiKey,
+  type CreatedKey,
+  type KeyCreateParams,
+  type KeyLimits,
+  type KeyListParams,
+  type KeyPage,
+  type KeysContext,
+  type KeyUpdateParams,
+  type KeyUsage,
+  type RevokedByLabels,
+  type RevokedKey,
+  type UsageListParams,
+  type UsagePage,
+  type UsagePeriod,
+} from './keys.js';
+export {
   MAX_VIDEOS,
   MAX_VIDEO_FPS,
   Video,

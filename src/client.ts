@@ -11,6 +11,7 @@ import {
 } from './answers.js';
 import { Batches, CHECK_REQUESTS, type BatchRequest, type BatchRun, type RunBatchOptions } from './batches.js';
 import { Collections } from './collections.js';
+import { Keys, PerKeyUsage } from './keys.js';
 import type { BoosterInput } from './boosters.js';
 import { checkRequest, checkSessionOpen, type HeldLimits } from './checks.js';
 import { BadRequestError, DecisionNodeError, ServerError, localError } from './errors.js';
@@ -307,6 +308,10 @@ export class DecisionNode {
   readonly batches: Batches;
   /** Collections of faces: `create`, `list`, `get`, `delete`, `enroll`, `listItems` and `deleteItem`. */
   readonly collections: Collections;
+  /** Per-key usage: `key`, `list` and `all`. */
+  readonly usage: PerKeyUsage;
+  /** Device keys, with a Manage device keys key: `create`, `list`, `all`, `get`, `update`, `revoke` and `revokeByLabels`. */
+  readonly keys: Keys;
   readonly #transport: Transport;
   readonly #placer: ImagePlacer;
   /** Whether the caller set `timeout`: a set timeout is used as given, also for a decision naming `ocr`. */
@@ -378,6 +383,8 @@ export class DecisionNode {
       placer: this.#placer,
       limits: () => this.#limits(),
     });
+    this.usage = new PerKeyUsage({ transport: this.#transport });
+    this.keys = new Keys({ transport: this.#transport });
   }
 
   /** One decision: sends `POST /v1/decide` and returns typed answers. */
