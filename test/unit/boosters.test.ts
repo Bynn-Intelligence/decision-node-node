@@ -494,6 +494,20 @@ describe('fine-tuned models in models()', () => {
   });
 });
 
+describe('model prices in models()', () => {
+  it('reads the five prices as sent, null when the entry states none', () => {
+    const prices = { price_per_million_input: 0.042, price_per_million_output: 0, price_per_million_image: 0.09, price_per_million_video: 0.09, batch_price_factor: 0.7 };
+    const m = new ModelInfo({ name: 'decisionnode-moe', description: '', release_date: '', ...prices });
+    expect([m.pricePerMillionInput, m.pricePerMillionOutput, m.pricePerMillionImage, m.pricePerMillionVideo, m.batchPriceFactor]).toEqual([0.042, 0, 0.09, 0.09, 0.7]);
+    expect(m.limits).toEqual(prices);
+    const tuned = new ModelInfo({ name: 'decisionnode-flash@acme/triage', description: '', release_date: '', price_per_million_input: 0.055 });
+    expect([tuned.pricePerMillionInput, tuned.batchPriceFactor]).toEqual([0.055, null]);
+    const odd = new ModelInfo({ name: 'x', description: '', release_date: '', price_per_million_input: '0.04', batch_price_factor: true });
+    expect([odd.pricePerMillionInput, odd.batchPriceFactor]).toEqual([null, null]);
+    expect(odd.limits.batch_price_factor).toBe(true);
+  });
+});
+
 describe('names that are object keys', () => {
   it('keeps __proto__ as a plain key in evidence and in the header', () => {
     const d = new Decision(JSON.parse('{"model":"m","answers":{},"evidence":{"__proto__":{"status":"ok","results":[]}}}'), {});

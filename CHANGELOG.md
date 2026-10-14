@@ -26,6 +26,7 @@ Implements version 1.3 of the DecisionNode SDK specification (`SPEC_VERSION` is 
 - A decision whose boosters name `ocr` waits 30 s per attempt unless `timeout` is set, and is never retried after a timeout, since the server finishes that attempt and may bill it; its other retries stay.
 - Several places in one answer: `point()` and `box()` take `max` (2 to 16), sent only when given, and such a question is answered with a `PointsAnswer` or `BoxesAnswer` (`count`, `present`, `complete`, `points` or `boxes` with each place's `confidence`, `image`, `width`, `height`), told apart by the answer's own list. `max` is checked before sending (a whole number, 2 to 16); whether a model answers several places (`places.max_places` in `models()`) is the API's to judge, and a model that does not answers with its `ValidationError` (`not_supported`).
 - `Batch.priceFactor` is gone. The API does not send it: the batch price is each model's `batch_price_factor` in `models()` (none on a fine-tuned model), and each line's charge is in its usage.
+- `ModelInfo.pricePerMillionInput`, `pricePerMillionOutput`, `pricePerMillionImage`, `pricePerMillionVideo` and `batchPriceFactor`: the entry's prices as sent, each `null` when it states none (a fine-tuned model states no `batch_price_factor`). `limits` and `raw` keep them too.
 
 ## 0.2.0 (unreleased)
 

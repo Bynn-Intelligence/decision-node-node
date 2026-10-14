@@ -578,6 +578,16 @@ export class ModelInfo {
    * `null` on a catalogue entry.
    */
   readonly status: 'deployed' | 'ready' | (string & {}) | null;
+  /** The price in USD per million input tokens, as sent; `null` when the entry states none. */
+  readonly pricePerMillionInput: number | null;
+  /** The price in USD per million output tokens, as sent; `null` when the entry states none. */
+  readonly pricePerMillionOutput: number | null;
+  /** The price in USD per million image tokens, as sent; `null` when the entry states none. */
+  readonly pricePerMillionImage: number | null;
+  /** The price in USD per million video tokens, as sent; `null` when the entry states none. */
+  readonly pricePerMillionVideo: number | null;
+  /** The share of the live prices a batch line on this model pays, as sent; `null` when the entry states none, as on a fine-tuned model. */
+  readonly batchPriceFactor: number | null;
   /** The entry as parsed. */
   readonly raw: Record<string, unknown>;
 
@@ -602,5 +612,10 @@ export class ModelInfo {
     this.base = field(raw, 'base', (v) => typeof v === 'string');
     this.adapterVersion = field(raw, 'adapter_version', (v) => typeof v === 'number' && Number.isInteger(v));
     this.status = field(raw, 'status', (v) => typeof v === 'string');
+    this.pricePerMillionInput = field(raw, 'price_per_million_input', isNumber);
+    this.pricePerMillionOutput = field(raw, 'price_per_million_output', isNumber);
+    this.pricePerMillionImage = field(raw, 'price_per_million_image', isNumber);
+    this.pricePerMillionVideo = field(raw, 'price_per_million_video', isNumber);
+    this.batchPriceFactor = field(raw, 'batch_price_factor', isNumber);
   }
 }

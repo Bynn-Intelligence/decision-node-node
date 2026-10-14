@@ -939,6 +939,18 @@ async function runResponse(c: Json): Promise<void> {
       const tuned: Json = { fine_tuned: m.fineTuned, base: m.base, adapter_version: m.adapterVersion, status: m.status };
       const listed: Json = wanted[i] && typeof wanted[i] === 'object' ? wanted[i] : {};
       for (const [k, v] of Object.entries(tuned)) if (k in listed) entry[k] = v;
+      // The typed prices are the entry's, as sent.
+      const prices: Json = {
+        price_per_million_input: m.pricePerMillionInput,
+        price_per_million_output: m.pricePerMillionOutput,
+        price_per_million_image: m.pricePerMillionImage,
+        price_per_million_video: m.pricePerMillionVideo,
+        batch_price_factor: m.batchPriceFactor,
+      };
+      for (const [k, v] of Object.entries(prices)) {
+        const sent = m.limits[k];
+        if (!same(v, typeof sent === 'number' ? sent : null)) throw new Error(`models: ${m.name}.${k} is ${short(v)}, the entry sent ${short(sent as Json)}`);
+      }
       return entry;
     });
     if (!same(exp.models, got)) throw new Error(`models: expected ${short(exp.models)}, got ${short(got)}`);
