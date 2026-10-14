@@ -6,6 +6,8 @@
  * API's object as sent, wire names as they are.
  */
 
+import { entry, localValidation, type Entry } from './checks.js';
+import { echoed } from './collections.js';
 import { BadRequestError, localError } from './errors.js';
 import type { Transport } from './transport.js';
 
@@ -168,6 +170,11 @@ const LABEL_NAME = /^[a-z0-9_.-]{1,32}$/;
 const LABEL_VALUE_CHARS = 64;
 const DEVICE_ID_CHARS = 128;
 const IDEMPOTENCY_KEY_CHARS = 255;
+const KEY_NAME_CHARS = 48;
+const KEY_MAX_LABELS = 16;
+const SPEND_CAP_MAX_USD = 1000;
+const MAX_REVOKE_DEVICES = 1000;
+const DEVICE_ID_RULE = 'device_id is 1 to 128 printable ASCII characters, not starting with a space.';
 
 type Query = Array<[string, string]>;
 
@@ -226,12 +233,14 @@ function labelQuery(labels: Record<string, string> | undefined): Query {
   return q;
 }
 
+function deviceOk(value: unknown): boolean {
+  return typeof value === 'string' && value.length >= 1 && value.length <= DEVICE_ID_CHARS && printableAscii(value) && !value.startsWith(' ');
+}
+
 function deviceQuery(deviceId: unknown): Query {
   if (!given(deviceId)) return [];
-  if (typeof deviceId !== 'string' || deviceId.length < 1 || deviceId.length > DEVICE_ID_CHARS || !printableAscii(deviceId) || deviceId.startsWith(' ')) {
-    throw usageError('device_id is 1 to 128 printable ASCII characters, not starting with a space.');
-  }
-  return [['device_id', deviceId]];
+  if (!deviceOk(deviceId)) throw usageError(DEVICE_ID_RULE);
+  return [['device_id', deviceId as string]];
 }
 
 function statusQuery(status: unknown): Query {
@@ -273,6 +282,81 @@ function usageListQuery(p: UsageListParams): Query {
   }
   q.push(...pageQuery(p.limit, USAGE_LIMIT_MAX, p.cursor));
   return q;
+}
+
+function keyEntry(loc: string[], msg: string, value: unknown): Entry {
+  return entry('value_error', ['body', ...loc], msg, echoed(value));
+}
+
+/** A key's name, trimmed, 1 to 48 characters; its characters are the server's to judge. */
+function nameEntries(name: unknown): Entry[] {
+  if (typeof name !== 'string' || name.trim() === '') return [keyEntry(['name'], 'Give the key a name.', name)];
+  if ([...name.trim()].length > KEY_NAME_CHARS) return [keyEntry(['name'], 'Key names are at most 48 characters.', name)];
+  return [];
+}
+
+function labelsEntries(labels: unknown): Entry[] {
+  if (labels === null || typeof labels !== 'object' || Array.isArray(labels)) {
+    return [keyEntry(['labels'], 'labels is an object of names to values.', labels)];
+  }
+  const names = Object.keys(labels);
+  if (names.length > KEY_MAX_LABELS) return [keyEntry(['labels'], 'A key has at most 16 labels.', labels)];
+  for (const name of names) {
+    const value: unknown = (labels as Record<string, unknown>)[name];
+    if (!LABEL_NAME.test(name)) return [keyEntry(['labels'], "A label's name is 1 to 32 of a-z, 0-9, _ . and -.", labels)];
+    if (typeof value !== 'string' || [...value].length < 1 || [...value].length > LABEL_VALUE_CHARS || /\p{Cc}/u.test(value)) {
+      return [keyEntry(['labels', name], "A label's value is 1 to 64 characters of text.", labels)];
+    }
+  }
+  return [];
+}
+
+/** `daily_spend_cap`: `{ usd }` from 0.01 to 1,000 in whole cents. */
+function capEntries(cap: unknown): Entry[] {
+  const usd = cap !== null && typeof cap === 'object' && !Array.isArray(cap) ? (cap as Record<string, unknown>).usd : undefined;
+  const ok = typeof usd === 'number' && Number.isFinite(usd);
+  const cents = ok ? Math.round(usd * 100) : 0;
+  if (!ok || Math.abs(usd * 100 - cents) >= 1e-6 || cents < 1 || usd > SPEND_CAP_MAX_USD) {
+    return [keyEntry(['daily_spend_cap'], 'daily_spend_cap.usd is from 0.01 to 1000, in cents, or null.', cap)];
+  }
+  return [];
+}
+
+/**
+ * A key's create (`clears` false) or update body, the fields given only,
+ * checked in the body's order: the first fault is the API's 422 entry. On an
+ * update a field given as `null` clears it and is checked no further. A
+ * limit's ceiling, the expiry's window and a name's characters are the server's.
+ */
+function checkKeyFields(body: Record<string, unknown>, clears: boolean): void {
+  let entries = 'name' in body ? nameEntries(body.name) : [];
+  if (entries.length === 0) {
+    if ('device_id' in body && !deviceOk(body.device_id)) entries.push(keyEntry(['device_id'], DEVICE_ID_RULE, body.device_id));
+    if ('labels' in body && !(clears && body.labels === null)) entries.push(...labelsEntries(body.labels));
+    if ('limits' in body && !(clears && body.limits === null)) {
+      const limits = body.limits;
+      if (limits === null || typeof limits !== 'object' || Array.isArray(limits)) entries.push(keyEntry(['limits'], 'limits is an object, or null.', limits));
+    }
+    if ('daily_spend_cap' in body && !(clears && body.daily_spend_cap === null)) entries.push(...capEntries(body.daily_spend_cap));
+  }
+  if (entries.length > 0) throw localValidation(entries.slice(0, 1));
+}
+
+/** A bulk revoke's labels (at least one) and `device_ids` (at most 1,000). */
+function checkRevokeByLabels(labels: unknown, deviceIds: unknown): void {
+  let entries = labelsEntries(labels);
+  if (entries.length === 0 && Object.keys(labels as object).length === 0) {
+    entries = [keyEntry(['labels'], 'A bulk revoke names at least one label: every key it revokes has them all.', labels)];
+  }
+  if (entries.length === 0 && given(deviceIds)) {
+    if (!Array.isArray(deviceIds) || deviceIds.length > MAX_REVOKE_DEVICES) {
+      entries = [keyEntry(['device_ids'], 'device_ids is a list of at most 1,000 device ids.', deviceIds)];
+    } else {
+      const bad = deviceIds.find((d) => !deviceOk(d));
+      if (bad !== undefined) entries = [keyEntry(['device_id'], DEVICE_ID_RULE, bad)];
+    }
+  }
+  if (entries.length > 0) throw localValidation(entries.slice(0, 1));
 }
 
 function withQuery(path: string, q: Query): string {
@@ -359,10 +443,6 @@ export class Keys {
    * Each field is sent only when given.
    */
   async create(params: KeyCreateParams, options: { signal?: AbortSignal } = {}): Promise<CreatedKey> {
-    const key = params.idempotencyKey;
-    if (given(key) && (typeof key !== 'string' || key.length < 1 || key.length > IDEMPOTENCY_KEY_CHARS || !printableAscii(key))) {
-      throw usageError('Idempotency-Key must be sent once, as 1 to 255 printable ASCII characters.');
-    }
     const body: Record<string, unknown> = { name: params.name };
     for (const [wire, value] of [
       ['device_id', params.deviceId],
@@ -373,6 +453,12 @@ export class Keys {
       ['may_search_collections', params.maySearchCollections],
     ] as const) {
       if (given(value)) body[wire] = value;
+    }
+    // The body's 422 first, then the key's 400, as the API checks them.
+    checkKeyFields(body, false);
+    const key = params.idempotencyKey;
+    if (given(key) && (typeof key !== 'string' || key.length < 1 || key.length > IDEMPOTENCY_KEY_CHARS || !printableAscii(key))) {
+      throw usageError('Idempotency-Key must be sent once, as 1 to 255 printable ASCII characters.');
     }
     const res = await this.#ctx.transport.json({
       method: 'POST',
@@ -422,6 +508,7 @@ export class Keys {
     ] as const) {
       if (value !== undefined) body[wire] = value;
     }
+    checkKeyFields(body, true);
     if (Object.keys(body).length === 0) throw usageError('Nothing to change.');
     const path = keyPath(keyId);
     const { body: key } = await this.#ctx.transport.json({ method: 'PATCH', path, body: JSON.stringify(body), signal: options.signal });
@@ -445,6 +532,7 @@ export class Keys {
     params: { deviceIds?: string[]; dryRun?: boolean } = {},
     options: { signal?: AbortSignal } = {},
   ): Promise<RevokedByLabels> {
+    checkRevokeByLabels(labels, params.deviceIds);
     const body: Record<string, unknown> = { labels };
     if (given(params.deviceIds)) body.device_ids = [...params.deviceIds!];
     if (given(params.dryRun)) body.dry_run = params.dryRun;

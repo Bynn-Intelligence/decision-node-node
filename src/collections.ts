@@ -83,7 +83,7 @@ const REFERENCE_QUERY = new RegExp(REFERENCE_PATTERN);
  * characters (code points) with "..." added when it was longer, an object or an array
  * never (null), anything else as it is.
  */
-function echoed(value: unknown): unknown {
+export function echoed(value: unknown): unknown {
   if (typeof value === 'string') {
     const chars = [...value];
     return chars.length > ECHO_CHARS ? `${chars.slice(0, ECHO_CHARS).join('')}...` : value;

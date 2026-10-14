@@ -610,7 +610,9 @@ while ((await admin.keys.revokeByLabels({ store: '118' })).more) {
 | `revoke(keyId)` | `DELETE`: the key is revoked at once |
 | `revokeByLabels(labels, { deviceIds, dryRun })` | every active key with all of `labels`, at most 10,000 a call: `{ revoked, more }`; call again while `more` is true. `dryRun: true` counts them instead: `{ would_revoke, more }` |
 
-`create` sends an `Idempotency-Key`: yours when you pass `idempotencyKey` (one per enrollment), else a new UUID per call, the same on every attempt, so a retried call makes one key. A retry with the same key and body within 24 hours returns the same key and secret. A label filter, a device id, a `status` and a `limit` are checked before anything is sent, as the API checks them, and so is an `update` with nothing to change. The whole flow is in [Keys on devices](https://decisionnode.com/docs/patterns/device-keys).
+`create` sends an `Idempotency-Key`: yours when you pass `idempotencyKey` (one per enrollment), else a new UUID per call, the same on every attempt, so a retried call makes one key. A retry with the same key and body within 24 hours returns the same key and secret.
+
+What the API checks by fixed rules is checked before anything is sent, with its messages: a key's name (1 to 48 characters once trimmed), a device id (1 to 128 printable ASCII characters, not starting with a space), labels (at most 16, each name 1 to 32 of `a-z`, `0-9`, `_`, `.` and `-`, each value 1 to 64 characters), `limits` being an object, a `dailySpendCap` from USD 0.01 to 1,000 in whole cents, an `update` with nothing to change, a `revokeByLabels` without a label or with over 1,000 `deviceIds`, and `list`'s filters and `limit`. A limit's ceiling (your workspace's own), the expiry's window and a name's characters are the API's to judge. The whole flow is in [Keys on devices](https://decisionnode.com/docs/patterns/device-keys).
 
 ## Per-key usage
 

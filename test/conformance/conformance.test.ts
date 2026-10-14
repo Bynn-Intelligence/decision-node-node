@@ -513,6 +513,33 @@ const USAGE_ARGS: Record<string, string> = {
   cursor: 'cursor',
 };
 
+// Suite 1.20: the keys calls' neutral arguments and Node's names for them.
+const KEY_ARGS: Record<string, string> = {
+  name: 'name',
+  device_id: 'deviceId',
+  labels: 'labels',
+  limits: 'limits',
+  daily_spend_cap: 'dailySpendCap',
+  expires_at: 'expiresAt',
+  may_search_collections: 'maySearchCollections',
+  idempotency_key: 'idempotencyKey',
+  status: 'status',
+  limit: 'limit',
+  cursor: 'cursor',
+};
+
+/** The arguments the case gives, by Node's names; a null given (an update's clear) stays null. */
+function keyParams(args: Json, ctx: Json, skip: string[] = []): Json {
+  const p: Json = {};
+  for (const [neutral, value] of Object.entries(args)) {
+    if (skip.includes(neutral)) continue;
+    const name = KEY_ARGS[neutral];
+    if (name === undefined) throw new Error(`keys: unknown argument ${neutral}`);
+    p[name] = decode(value, ctx);
+  }
+  return p;
+}
+
 function usageParams(args: Json, ctx: Json): Json {
   const p: Json = {};
   for (const [neutral, name] of Object.entries(USAGE_ARGS)) if (neutral in args) p[name] = decode(args[neutral], ctx);
@@ -670,6 +697,22 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
       return client.usage.list(usageParams(args, ctx));
     case 'usage.all':
       return client.usage.all(usageParams(args, ctx));
+    case 'keys.create':
+      return client.keys.create(keyParams(args, ctx));
+    case 'keys.list':
+      return client.keys.list(keyParams(args, ctx));
+    case 'keys.all':
+      return client.keys.all(keyParams(args, ctx));
+    case 'keys.update':
+      return client.keys.update(decode(args.key_id, ctx), keyParams(args, ctx, ['key_id']));
+    case 'keys.revoke':
+      return client.keys.revoke(decode(args.key_id, ctx));
+    case 'keys.revoke_by_labels': {
+      const p: Json = {};
+      if ('device_ids' in args) p.deviceIds = decode(args.device_ids, ctx);
+      if ('dry_run' in args) p.dryRun = decode(args.dry_run, ctx);
+      return client.keys.revokeByLabels(decode(args.labels, ctx), p);
+    }
     default:
       throw new Error(`unknown method ${method}`);
   }
@@ -946,11 +989,26 @@ function checkBatchResult(spec: Json, r: BatchResult, where: string): void {
   if (spec.no_decision && r.decision !== null) throw new Error(`${where}: expected no decision`);
 }
 
-// The collections calls' results (suite 1.13) and the usage calls' (1.18), each
-// the API's object as sent; `collections` and `usage_items` are lists, compared
-// in order and by length.
-const COLLECTION_KINDS = ['collection', 'collections', 'item', 'item_page', 'deleted', 'key_usage', 'usage_page', 'usage_items'];
-const LIST_KINDS = ['collections', 'usage_items'];
+// The collections calls' results (suite 1.13), the usage calls' (1.18) and the
+// keys calls' (1.20), each the API's object as sent; `collections`,
+// `usage_items` and `api_keys` are lists, compared in order and by length.
+const COLLECTION_KINDS = [
+  'collection',
+  'collections',
+  'item',
+  'item_page',
+  'deleted',
+  'key_usage',
+  'usage_page',
+  'usage_items',
+  'created_key',
+  'api_key',
+  'key_page',
+  'api_keys',
+  'key_revoked',
+  'keys_revoked',
+];
+const LIST_KINDS = ['collections', 'usage_items', 'api_keys'];
 
 function checkCollectionResult(kind: string, expected: Json, result: Json, path: string): void {
   if (LIST_KINDS.includes(kind)) {
@@ -1098,6 +1156,12 @@ async function checkOutcome(spec: Json, result: unknown, path: string): Promise<
     case 'key_usage':
     case 'usage_page':
     case 'usage_items':
+    case 'created_key':
+    case 'api_key':
+    case 'key_page':
+    case 'api_keys':
+    case 'key_revoked':
+    case 'keys_revoked':
       checkCollectionResult(spec.result, spec[spec.result] ?? (LIST_KINDS.includes(spec.result) ? undefined : {}), r, `${path}.${spec.result}`);
       return;
     case 'session':

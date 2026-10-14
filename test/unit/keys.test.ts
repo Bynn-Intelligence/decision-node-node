@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { BadRequestError, DecisionNode, DecisionNodeError, NotFoundError, PermissionDeniedError, RateLimitError, truth } from '../../src/index.js';
+import { BadRequestError, DecisionNode, DecisionNodeError, NotFoundError, PermissionDeniedError, RateLimitError, ValidationError, truth } from '../../src/index.js';
 import { OK_TRUTH, fakeFetch, type Recorded, type Reply } from './helpers.js';
 
 const ENV = ['DECISIONNODE_API_KEY', 'DECISIONNODE_BASE_URL', 'DECISIONNODE_MODEL'];
@@ -161,7 +161,74 @@ describe('keys.create', () => {
   }
 });
 
-describe('keys: list, get, update, revoke', () => {
+const DEVICE_RULE = 'device_id is 1 to 128 printable ASCII characters, not starting with a space.';
+
+/** The one 422 entry a call refuses with locally, nothing sent. */
+async function localEntry(call: (dn: DecisionNode) => Promise<unknown>): Promise<Record<string, unknown>> {
+  const { dn, calls } = client([{ status: 201, body: CREATED }]);
+  const err = (await refusal(() => call(dn))) as ValidationError;
+  expect(err).toBeInstanceOf(ValidationError);
+  expect(calls).toHaveLength(0);
+  expect(err.status).toBeNull();
+  expect(err.entries).toHaveLength(1);
+  return err.entries![0] as unknown as Record<string, unknown>;
+}
+
+describe('keys: local checks', () => {
+  const labels17 = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [String(i), 'v']));
+  const cases: Array<[string, Record<string, unknown>, Array<string>, string, unknown]> = [
+    ['a blank name', { name: '   ' }, ['body', 'name'], 'Give the key a name.', '   '],
+    ['a long name', { name: 'x'.repeat(49) }, ['body', 'name'], 'Key names are at most 48 characters.', 'x'.repeat(49)],
+    ['a device id', { name: 'k', deviceId: ' kiosk' }, ['body', 'device_id'], DEVICE_RULE, ' kiosk'],
+    ['labels not an object', { name: 'k', labels: ['a'] }, ['body', 'labels'], 'labels is an object of names to values.', null],
+    ['17 labels', { name: 'k', labels: labels17 }, ['body', 'labels'], 'A key has at most 16 labels.', null],
+    ['a label name', { name: 'k', labels: { Store: '1' } }, ['body', 'labels'], "A label's name is 1 to 32 of a-z, 0-9, _ . and -.", null],
+    ['an empty label value', { name: 'k', labels: { store: '' } }, ['body', 'labels', 'store'], "A label's value is 1 to 64 characters of text.", null],
+    ['limits not an object', { name: 'k', limits: 5 }, ['body', 'limits'], 'limits is an object, or null.', 5],
+    ['a half-cent cap', { name: 'k', dailySpendCap: { usd: 0.005 } }, ['body', 'daily_spend_cap'], 'daily_spend_cap.usd is from 0.01 to 1000, in cents, or null.', null],
+    ['a cap over 1,000', { name: 'k', dailySpendCap: { usd: 1000.01 } }, ['body', 'daily_spend_cap'], 'daily_spend_cap.usd is from 0.01 to 1000, in cents, or null.', null],
+  ];
+  for (const [what, params, loc, msg, input] of cases) {
+    it(`create refuses ${what} before sending`, async () => {
+      const e = await localEntry((dn) => dn.keys.create(params as never));
+      expect([e.type, e.loc, e.msg, e.input]).toEqual(['value_error', loc, msg, input]);
+    });
+  }
+
+  it('checks the body before the Idempotency-Key', async () => {
+    const e = await localEntry((dn) => dn.keys.create({ name: '', idempotencyKey: '' }));
+    expect(e.msg).toBe('Give the key a name.');
+  });
+
+  it('lets a whole-cent cap through', async () => {
+    const { dn, calls } = client([{ status: 201, body: CREATED }]);
+    await dn.keys.create({ name: 'k', dailySpendCap: { usd: 1000 } });
+    expect((sent(calls[0]!).body as Record<string, unknown>).daily_spend_cap).toEqual({ usd: 1000 });
+  });
+
+  it('checks what an update sends, and sends a clearing null unchecked', async () => {
+    const e = await localEntry((dn) => dn.keys.update(KEY_ID, { name: 'x'.repeat(49) }));
+    expect(e.msg).toBe('Key names are at most 48 characters.');
+    const { dn, calls } = client([{ status: 200, body: KEY }]);
+    await dn.keys.update(KEY_ID, { labels: null, limits: null, dailySpendCap: null });
+    expect(sent(calls[0]!).body).toEqual({ labels: null, limits: null, daily_spend_cap: null });
+  });
+
+  const revokes: Array<[string, () => [Record<string, string>, { deviceIds?: string[] }], Array<string>, string]> = [
+    ['no label', () => [{}, {}], ['body', 'labels'], 'A bulk revoke names at least one label: every key it revokes has them all.'],
+    ['1,001 device ids', () => [{ store: '1' }, { deviceIds: Array.from({ length: 1001 }, () => 'd') }], ['body', 'device_ids'], 'device_ids is a list of at most 1,000 device ids.'],
+    ['a bad device id', () => [{ store: '1' }, { deviceIds: ['ok', ' bad'] }], ['body', 'device_id'], DEVICE_RULE],
+  ];
+  for (const [what, args, loc, msg] of revokes) {
+    it(`revokeByLabels refuses ${what} before sending`, async () => {
+      const [labels, params] = args();
+      const e = await localEntry((dn) => dn.keys.revokeByLabels(labels, params));
+      expect([e.loc, e.msg]).toEqual([loc, msg]);
+    });
+  }
+});
+
+describe('keys: list, update, revoke', () => {
   it('lists with its filters, labels sorted by name', async () => {
     const { dn, calls } = client([{ status: 200, body: { items: [KEY], next_cursor: null } }]);
     const page = await dn.keys.list({ labels: { store: '118', fw: '2.4' }, deviceId: 'kiosk 0412', status: 'all', limit: 50, cursor: 'c1' });
