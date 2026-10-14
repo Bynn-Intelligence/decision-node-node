@@ -120,9 +120,18 @@ function short(v: Json): string {
   return t === undefined ? String(v) : t.length < 200 ? t : `${t.slice(0, 197)}...`;
 }
 
+/** An expected `{"$absent": true}`: the key must not be there at all (suite 1.17). */
+function isAbsent(v: Json): boolean {
+  return v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 1 && v.$absent === true;
+}
+
 function match(expected: Json, actual: Json, path: string): void {
   if (expected && typeof expected === 'object' && !Array.isArray(expected) && !isPattern(expected) && actual && typeof actual === 'object' && !Array.isArray(actual)) {
     for (const [k, v] of Object.entries(expected)) {
+      if (isAbsent(v)) {
+        if (k in actual) throw new Error(`${path}.${k}: expected no such key, got ${short(actual[k])}`);
+        continue;
+      }
       if (!(k in actual)) throw new Error(`${path}.${k}: missing (expected ${short(v)})`);
       if (EXACT.has(k)) {
         if (!same(v, actual[k])) throw new Error(`${path}.${k}: expected ${short(v)}, got ${short(actual[k])}`);
@@ -136,6 +145,15 @@ function match(expected: Json, actual: Json, path: string): void {
     return;
   }
   if (!same(expected, actual)) throw new Error(`${path}: expected ${short(expected)}, got ${short(actual)}`);
+}
+
+/** A batch compares as sent; a key expected absent is neither sent nor a field of `Batch`, in either spelling. */
+function matchBatch(expected: Json, batch: Batch, path: string): void {
+  match(expected, batch.raw, path);
+  for (const [k, v] of Object.entries(expected ?? {})) {
+    const camel = k.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+    if (isAbsent(v) && (k in batch || camel in batch)) throw new Error(`${path}.${k}: expected no such field on Batch`);
+  }
 }
 
 function pointer(doc: Json, ptr: string): [boolean, Json] {
@@ -927,7 +945,7 @@ async function runResponse(c: Json): Promise<void> {
   } else if ('raw' in exp) {
     if (!same(exp.raw, result)) throw new Error(`raw: expected ${short(exp.raw)}, got ${short(result)}`);
   } else if ('batch' in exp) {
-    match(exp.batch, (result as Batch).raw, 'batch');
+    matchBatch(exp.batch, result as Batch, 'batch');
   } else if ('batch_page' in exp) {
     match(exp.batch_page, result.raw, 'batch_page');
   } else if ('batch_results' in exp) {
@@ -1003,7 +1021,7 @@ async function checkOutcome(spec: Json, result: unknown, path: string): Promise<
       return;
     case 'batch':
       if (!(r instanceof Batch)) throw new Error(`${path}: expected a Batch, got ${short(r)}`);
-      match(spec.batch ?? {}, r.raw, `${path}.batch`);
+      matchBatch(spec.batch ?? {}, r, `${path}.batch`);
       return;
     case 'batch_page':
       match(spec.batch_page ?? {}, r.raw, `${path}.batch_page`);
@@ -1012,7 +1030,7 @@ async function checkOutcome(spec: Json, result: unknown, path: string): Promise<
       await checkResultsSpec(spec, r, path);
       return;
     case 'batch_run':
-      match(spec.batch ?? {}, r.batch.raw, `${path}.batch`);
+      matchBatch(spec.batch ?? {}, r.batch, `${path}.batch`);
       await checkResultsSpec(spec, r.results, path);
       return;
     case 'checked':

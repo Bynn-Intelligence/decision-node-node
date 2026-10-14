@@ -70,7 +70,11 @@ function strOrNull(v: unknown): string | null {
   return typeof v === 'string' ? v : null;
 }
 
-/** A batch: every field of the batch object, and `raw` as sent. */
+/**
+ * A batch: every field of the batch object, and `raw` as sent. A batch states
+ * no price: the batch price is each model's `batch_price_factor` in
+ * `models()`, and each line's charge is in its usage.
+ */
 export class Batch {
   readonly id: string;
   readonly state: BatchState | string;
@@ -82,7 +86,6 @@ export class Batch {
   readonly endedAt: string | null;
   readonly resultsUrl: string | null;
   readonly resultsExpireAt: string | null;
-  readonly priceFactor: number;
   readonly usage: { inputTokens: number; outputTokens: number };
   /** When `failed`: what happened. */
   readonly error: { errorType: string; message: string } | null;
@@ -108,7 +111,6 @@ export class Batch {
     this.endedAt = strOrNull(raw.ended_at);
     this.resultsUrl = strOrNull(raw.results_url);
     this.resultsExpireAt = strOrNull(raw.results_expire_at);
-    this.priceFactor = raw.price_factor as number;
     const u = (raw.usage && typeof raw.usage === 'object' ? raw.usage : {}) as Record<string, unknown>;
     this.usage = { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens) };
     const e = raw.error && typeof raw.error === 'object' ? (raw.error as Record<string, unknown>) : null;

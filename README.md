@@ -512,7 +512,7 @@ When you pass your own `fetch`, the client cannot see what proxy it uses: config
 
 ## Batches
 
-A batch runs many decide requests at the batch price: 50% off the live price on `decisionnode-flash`, 30% off on `decisionnode-moe` (each model's `batch_price_factor` in `models()`, 0.5 and 0.7). There is no set time at which a batch runs or finishes, so poll for it. Requests not answered within 24 hours of finalizing expire and are not charged. Each request carries your own `customId`, unique in the batch.
+A batch runs many decide requests at the batch price: 50% off the live price on `decisionnode-flash`, 30% off on `decisionnode-moe`. The batch price is each model's, its `batch_price_factor` in `models()` (0.5 and 0.7; a fine-tuned model's entry states none), never the batch's, and each line's charge is in its usage. There is no set time at which a batch runs or finishes, so poll for it. Requests not answered within 24 hours of finalizing expire and are not charged. Each request carries your own `customId`, unique in the batch.
 
 ```ts
 const { batch, results } = await dn.runBatch(
@@ -540,7 +540,7 @@ The steps are also available one by one on `dn.batches`:
 | `results(batchId)` | The results of an ended batch, read line by line as they download |
 | `cancel(batchId)` | Cancels the batch; lines already running finish |
 
-Requests are sent as JSON Lines; each line always carries a model (the request's, else the client's), and a missing state is sent as empty. Every request is checked before anything is sent, as for `decide`, and its local images go inline or by upload id by the same threshold, counted per line. A `Batch` has every field of the API's batch object: `id`, `state`, `counters`, `createdAt`, `finalizedAt`, `expiresAt`, `endedAt`, `resultsUrl`, `resultsExpireAt`, `priceFactor`, `usage`, `error`, and `raw`.
+Requests are sent as JSON Lines; each line always carries a model (the request's, else the client's), and a missing state is sent as empty. Every request is checked before anything is sent, as for `decide`, and its local images go inline or by upload id by the same threshold, counted per line. A `Batch` has every field of the API's batch object: `id`, `state`, `counters`, `createdAt`, `finalizedAt`, `expiresAt`, `endedAt`, `resultsUrl`, `resultsExpireAt`, `usage`, `error`, and `raw`.
 
 `results()` returns `BatchResults`: iterate it once with `for await`, or call `toArray()`. It reads the whole results file as it downloads, line by line, however many lines it has; nothing is paged and the file is never held whole in memory unless you collect it. Each `BatchResult` has `customId`, `status` (the line's HTTP status, or `expired` or `cancelled` for a line that never ran), `headers`, and either `decision` (a `Decision` for a `200` line, numbers exactly as sent) or `error` (the error that status and body give, as a value, never thrown).
 
@@ -664,7 +664,7 @@ models.map((m) => [m.name, m.limits]);
 
 A pinned release is `decisionnode-<family>-<version>`, for example `decisionnode-moe-<version>`, with the versions `models()` lists. Every answer names the pinned id that answered in `decision.model`, so you can log which release decided. `model` is free text: a pinned id, a fine-tuned model's name, and the older ids the API still accepts (`decisionnode-1.0`, `decisionnode-1.0-flash`, `decisionnode-latest`, `decisionnode-flash-latest`) are sent as given.
 
-Limits differ by model version; `models()` returns each model's published limits in `limits`, wire names as sent. The number, upload, session and batch limits are also typed fields: `numberOneQuestionValues`, `numberMaxGridValues`, `numberDefaultRange`, `numberDefaultStep`, `uploadMaxBytes`, `uploadTtlSeconds`, `uploadMediaTypes`, `sessions` and `batch`, each `null` when a model does not publish it.
+Limits differ by model version; `models()` returns each model's published limits in `limits`, wire names as sent, its prices included (`price_per_million_input`, `price_per_million_output`, `price_per_million_image` and `price_per_million_video`, in USD per million tokens, and `batch_price_factor`). The number, upload, session and batch limits are also typed fields: `numberOneQuestionValues`, `numberMaxGridValues`, `numberDefaultRange`, `numberDefaultStep`, `uploadMaxBytes`, `uploadTtlSeconds`, `uploadMediaTypes`, `sessions` and `batch`, each `null` when a model does not publish it.
 
 ### Fallback
 
