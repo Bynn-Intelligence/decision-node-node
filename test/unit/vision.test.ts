@@ -125,10 +125,17 @@ describe('bynn_depth readings', () => {
     expect([(r as UnknownReading).image, r!.raw]).toEqual(['front', { image: 'front', readable: false }]);
   });
 
+  it('reads a missing ahead as null', () => {
+    const [r] = readings('bynn_depth', [changed(DEPTH, ['ahead'], REMOVE)]);
+    expect(r).toBeInstanceOf(DepthReading);
+    expect((r as DepthReading).ahead).toBeNull();
+  });
+
   const malformed: Array<[Array<string | number>, unknown]> = [
-    [['ahead'], REMOVE],
     [['ahead'], 'near'],
     [['directions'], 'left'],
+    [['directions'], Array(6).fill(1.0)],
+    [['directions'], Array(8).fill(1.0)],
     [['directions', 0], 'far'],
     [['ground'], 1],
     [['grid_rows'], 2.5],
@@ -200,23 +207,42 @@ describe('bynn_segment readings', () => {
     expect((empty as SegmentReading).instances).toEqual([]);
   });
 
+  const absent: Array<[Array<string | number>, (s: SegmentReading) => unknown]> = [
+    [['depth_source'], (s) => s.depthSource],
+    [['assumed_hfov_deg'], (s) => s.assumedHfovDeg],
+    [['instances', 0, 'opening'], (s) => s.instances[0]!.opening],
+    [['instances', 0, 'depth'], (s) => s.instances[0]!.depth],
+    [['instances', 0, 'depth', 'opening_median'], (s) => s.instances[0]!.depth!.openingMedian],
+    [['instances', 0, 'size_m'], (s) => s.instances[0]!.sizeM],
+    [['instances', 0, 'size_m', 'opening'], (s) => s.instances[0]!.sizeM!.opening],
+  ];
+  for (const [path, read] of absent) {
+    it(`reads a missing ${path.join('.')} as null`, () => {
+      const [r] = readings('bynn_segment', [changed(SEGMENT, path, REMOVE)]);
+      expect(r).toBeInstanceOf(SegmentReading);
+      expect(read(r as SegmentReading)).toBeNull();
+    });
+  }
+
   const malformed: Array<[Array<string | number>, unknown]> = [
     [['prompts'], 'gate'],
     [['prompts', 0], 7],
     [['instances'], { label: 'gate' }],
-    [['depth_source'], REMOVE],
-    [['assumed_hfov_deg'], null],
+    [['depth_source'], 5],
+    [['assumed_hfov_deg'], 'wide'],
     [['width'], 1280.5],
     [['instances', 0, 'label'], null],
     [['instances', 0, 'box'], [0.1, 0.2, 0.3]],
     [['instances', 0, 'polygon'], [[0.1, 0.2, 0.3]]],
     [['instances', 0, 'centroid'], { x: 0.5, y: 0.5 }],
-    [['instances', 0, 'opening'], REMOVE],
+    [['instances', 0, 'opening'], 'hole'],
     [['instances', 0, 'opening', 'offset'], [0.0]],
+    [['instances', 0, 'opening', 'area'], REMOVE],
     [['instances', 0, 'depth'], 5.05],
-    [['instances', 0, 'depth', 'opening_median'], REMOVE],
-    [['instances', 0, 'size_m'], REMOVE],
-    [['instances', 0, 'size_m', 'opening'], REMOVE],
+    [['instances', 0, 'depth', 'opening_median'], 'far'],
+    [['instances', 0, 'size_m'], [2.45, 2.33]],
+    [['instances', 0, 'size_m', 'width'], REMOVE],
+    [['instances', 0, 'size_m', 'opening'], 1.82],
     [['instances', 0, 'size_m', 'opening', 'width'], null],
   ];
   for (const [path, value] of malformed) {

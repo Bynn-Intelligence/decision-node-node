@@ -435,13 +435,9 @@ export class UnknownReading {
   }
 }
 
-function has(r: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(r, key);
-}
-
-/** A number or `null`, the key present. */
+/** A number, or `null` or absent. */
 function nullableNumber(r: Record<string, unknown>, key: string): boolean {
-  return has(r, key) && (r[key] === null || isNumber(r[key]));
+  return r[key] === undefined || r[key] === null || isNumber(r[key]);
 }
 
 function isNumbers(v: unknown, count?: number): v is number[] {
@@ -452,10 +448,13 @@ function isPoints(v: unknown): v is number[][] {
   return Array.isArray(v) && v.every((p: unknown) => isNumbers(p, 2));
 }
 
-/** An object or `null`, the key present. */
+/** An object, or `null` or absent. */
 function nullableObject(r: Record<string, unknown>, key: string): boolean {
-  return has(r, key) && (r[key] === null || isObject(r[key]));
+  return r[key] === undefined || r[key] === null || isObject(r[key]);
 }
+
+/** A depth reading's directions: 7 equal vertical strips of the picture, left to right. */
+const DEPTH_DIRECTIONS = 7;
 
 /**
  * A `bynn_depth` reading of one image (Depth Vision): how far away things
@@ -470,7 +469,10 @@ export class DepthReading {
    * picture, the floor or ground left out); `null` when none is found.
    */
   readonly ahead: number | null;
-  /** The same in 7 equal vertical strips of the picture, left to right, each meters or `null`. */
+  /**
+   * The same in 7 equal vertical strips of the picture, left to right, each
+   * meters or `null`; a reading with another number of them is an `UnknownReading`.
+   */
   readonly directions: Array<number | null>;
   /** `true` when a floor or ground was found and left out of `ahead` and `directions`. */
   readonly ground: boolean;
@@ -494,7 +496,7 @@ export class DepthReading {
   constructor(raw: Record<string, unknown>) {
     this.raw = raw;
     this.image = raw.image as string;
-    this.ahead = raw.ahead as number | null;
+    this.ahead = (raw.ahead ?? null) as number | null;
     this.directions = [...(raw.directions as Array<number | null>)];
     this.ground = raw.ground as boolean;
     this.gridRows = raw.grid_rows as number;
@@ -512,6 +514,7 @@ export class DepthReading {
       typeof r.image === 'string' &&
       nullableNumber(r, 'ahead') &&
       Array.isArray(r.directions) &&
+      r.directions.length === DEPTH_DIRECTIONS &&
       r.directions.every((d: unknown) => d === null || isNumber(d)) &&
       typeof r.ground === 'boolean' &&
       isInteger(r.grid_rows) &&
@@ -600,24 +603,24 @@ function isSegmentInstance(e: unknown): boolean {
   if (typeof e.label !== 'string' || !isNumber(e.score) || !isNumbers(e.box, 4) || !isPoints(e.polygon)) return false;
   if (!isNumber(e.area) || !isNumbers(e.centroid, 2)) return false;
   if (!nullableObject(e, 'opening') || !nullableObject(e, 'depth') || !nullableObject(e, 'size_m')) return false;
-  const o = e.opening as Record<string, unknown> | null;
+  const o = (e.opening ?? null) as Record<string, unknown> | null;
   if (o !== null && !(isPoints(o.polygon) && isNumbers(o.centroid, 2) && isNumber(o.width) && isNumber(o.height) && isNumbers(o.offset, 2) && isNumber(o.area))) {
     return false;
   }
-  const d = e.depth as Record<string, unknown> | null;
+  const d = (e.depth ?? null) as Record<string, unknown> | null;
   if (d !== null && !(nullableNumber(d, 'median') && nullableNumber(d, 'opening_median') && nullableNumber(d, 'opening_rim_median'))) return false;
-  const s = e.size_m as Record<string, unknown> | null;
+  const s = (e.size_m ?? null) as Record<string, unknown> | null;
   if (s === null) return true;
   if (!isNumber(s.width) || !isNumber(s.height) || !nullableObject(s, 'opening')) return false;
-  const x = s.opening as Record<string, unknown> | null;
+  const x = (s.opening ?? null) as Record<string, unknown> | null;
   return x === null || (isNumber(x.width) && isNumber(x.height));
 }
 
 function segmentInstance(e: Record<string, unknown>): SegmentInstance {
-  const o = e.opening as Record<string, unknown> | null;
-  const d = e.depth as Record<string, unknown> | null;
-  const s = e.size_m as Record<string, unknown> | null;
-  const x = s === null ? null : (s.opening as Record<string, unknown> | null);
+  const o = (e.opening ?? null) as Record<string, unknown> | null;
+  const d = (e.depth ?? null) as Record<string, unknown> | null;
+  const s = (e.size_m ?? null) as Record<string, unknown> | null;
+  const x = s === null ? null : ((s.opening ?? null) as Record<string, unknown> | null);
   const points = (v: unknown) => (v as number[][]).map((p) => [...p]);
   return {
     label: e.label as string,
@@ -640,7 +643,11 @@ function segmentInstance(e: Record<string, unknown>): SegmentInstance {
     depth:
       d === null
         ? null
-        : { median: d.median as number | null, openingMedian: d.opening_median as number | null, openingRimMedian: d.opening_rim_median as number | null },
+        : {
+            median: (d.median ?? null) as number | null,
+            openingMedian: (d.opening_median ?? null) as number | null,
+            openingRimMedian: (d.opening_rim_median ?? null) as number | null,
+          },
     sizeM:
       s === null
         ? null
@@ -665,8 +672,8 @@ export class SegmentReading {
   readonly instances: SegmentInstance[];
   /** Where the distances come from (`bynn_depth`); `null` with depth off. */
   readonly depthSource: string | null;
-  /** The horizontal field of view the sizes in meters assume, in degrees. */
-  readonly assumedHfovDeg: number;
+  /** The horizontal field of view the sizes in meters assume, in degrees; `null` when the reading has none. */
+  readonly assumedHfovDeg: number | null;
   /** The reading as received. */
   readonly raw: Record<string, unknown>;
 
@@ -677,8 +684,8 @@ export class SegmentReading {
     this.height = raw.height as number;
     this.prompts = [...(raw.prompts as string[])];
     this.instances = (raw.instances as Record<string, unknown>[]).map(segmentInstance);
-    this.depthSource = raw.depth_source as string | null;
-    this.assumedHfovDeg = raw.assumed_hfov_deg as number;
+    this.depthSource = (raw.depth_source ?? null) as string | null;
+    this.assumedHfovDeg = (raw.assumed_hfov_deg ?? null) as number | null;
   }
 
   static wellFormed(r: Record<string, unknown>): boolean {
@@ -690,9 +697,8 @@ export class SegmentReading {
       r.prompts.every((p: unknown) => typeof p === 'string') &&
       Array.isArray(r.instances) &&
       r.instances.every(isSegmentInstance) &&
-      has(r, 'depth_source') &&
-      (r.depth_source === null || typeof r.depth_source === 'string') &&
-      isNumber(r.assumed_hfov_deg)
+      (r.depth_source === undefined || r.depth_source === null || typeof r.depth_source === 'string') &&
+      nullableNumber(r, 'assumed_hfov_deg')
     );
   }
 }
