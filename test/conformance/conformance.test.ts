@@ -23,8 +23,11 @@ import {
   OcrReading,
   UnknownReading,
   FaceRecognitionReading,
+  DepthReading,
+  SegmentReading,
   type FaceBox,
   type Reading,
+  type SegmentInstance,
   BoxAnswer,
   BoxesAnswer,
   PointAnswer,
@@ -277,8 +280,53 @@ function normReading(r: Reading): Json {
     };
   }
   if (r instanceof OcrReading) return { kind: 'ocr', image: r.image, text: r.text, truncated: r.truncated };
+  if (r instanceof DepthReading) {
+    return {
+      kind: 'bynn_depth',
+      image: r.image,
+      ahead: r.ahead,
+      directions: r.directions,
+      ground: r.ground,
+      grid_rows: r.gridRows,
+      grid_cols: r.gridCols,
+      grid: r.grid,
+      depth_min: r.depthMin,
+      depth_max: r.depthMax,
+      depth_median: r.depthMedian,
+      width: r.width,
+      height: r.height,
+    };
+  }
+  if (r instanceof SegmentReading) {
+    return {
+      kind: 'bynn_segment',
+      image: r.image,
+      width: r.width,
+      height: r.height,
+      prompts: r.prompts,
+      depth_source: r.depthSource,
+      assumed_hfov_deg: r.assumedHfovDeg,
+      instances: r.instances.map(normInstance),
+    };
+  }
   if (r instanceof UnknownReading) return { kind: 'unknown', raw: r.raw };
   throw new Error(`a reading of class ${(r as object).constructor.name}`);
+}
+
+/** A Segment Vision match as the cases write it: the wire's fields and shapes, an empty opening, depth or size_m (and the size's opening) as null. */
+function normInstance(i: SegmentInstance): Json {
+  const { opening: o, depth: d, sizeM: s } = i;
+  return {
+    label: i.label,
+    score: i.score,
+    box: i.box,
+    polygon: i.polygon,
+    area: i.area,
+    centroid: i.centroid,
+    opening: o === null ? null : { polygon: o.polygon, centroid: o.centroid, width: o.width, height: o.height, offset: o.offset, area: o.area },
+    depth: d === null ? null : { median: d.median, opening_median: d.openingMedian, opening_rim_median: d.openingRimMedian },
+    size_m: s === null ? null : { width: s.width, height: s.height, opening: s.opening === null ? null : { width: s.opening.width, height: s.opening.height } },
+  };
 }
 
 function normEvidence(evidence: Record<string, Evidence | undefined> | null): Json {
