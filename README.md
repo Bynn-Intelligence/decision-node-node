@@ -8,19 +8,19 @@ Runs on Node.js 20.16+, Deno, Bun and edge runtimes. Ships ESM, CommonJS and Typ
 
 ## Install
 
-From npm, once the package is published there:
-
-```sh
-npm install @decisionnode/sdk
-```
-
-From GitHub, which works today:
+Not on npm yet: the first release publishes it there. Until then, install it from GitHub:
 
 ```sh
 npm install github:Bynn-Intelligence/decision-node-node
 ```
 
 The GitHub install builds the package on your machine as it installs, and you import it by the same name, `@decisionnode/sdk`.
+
+Once it is on npm:
+
+```sh
+npm install @decisionnode/sdk
+```
 
 ## Set your key
 
