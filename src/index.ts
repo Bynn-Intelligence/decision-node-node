@@ -90,6 +90,8 @@ export {
   OcrReading,
   UnknownReading,
   FaceRecognitionReading,
+  DepthReading,
+  SegmentReading,
   parseBoostersHeader,
   type BoosterInput,
   type BoosterName,
@@ -102,6 +104,11 @@ export {
   type Reading,
   type TopGenerator,
   type FaceMatch,
+  type SegmentDepth,
+  type SegmentExtent,
+  type SegmentInstance,
+  type SegmentOpening,
+  type SegmentSize,
   type WireBooster,
 } from './boosters.js';
 export {

@@ -10,19 +10,42 @@
  * any other string is sent as given, so a booster added later works without
  * a new SDK.
  */
-export type BoosterName = 'age' | 'ai_generated' | 'face_detection' | 'face_recognition' | 'ocr' | (string & {});
+export type BoosterName =
+  | 'age'
+  | 'ai_generated'
+  | 'face_detection'
+  | 'face_recognition'
+  | 'ocr'
+  | 'bynn_depth'
+  | 'bynn_segment'
+  | (string & {});
 
 /**
  * A booster's own settings, sent as given in `options`; the API checks them.
  * Other keys are sent as given too, for settings a later booster adds.
  */
 export interface BoosterSettings {
-  /** `ocr`: what to read, at most 2,000 characters: a task, an instruction ("the invoice total and date") or a JSON schema. */
-  prompt?: string;
+  /**
+   * `ocr`: what to read, at most 2,000 characters: a task, an instruction
+   * ("the invoice total and date") or a JSON schema. `bynn_segment`
+   * (required): what to find, one phrase as a string or 1 to 4 phrases as an
+   * array, each at most 120 characters; a string is always one phrase.
+   */
+  prompt?: string | readonly string[];
   /** `face_recognition`: the collection to search, its id or a public collection's name. */
   collection?: string;
   /** `face_recognition`: the lowest match score it lists. */
   threshold?: number;
+  /** `bynn_depth`: the grid's cells per side, 2 to 16; left out, 8. */
+  grid_size?: number;
+  /** `bynn_segment`: at most this many found, 1 to 16; left out, 8. */
+  max_instances?: number;
+  /** `bynn_segment`: a match scored below it is left out, 0 to 1; left out, 0.25. */
+  min_score?: number;
+  /** `bynn_segment`: the points of each outline, 3 to 64; left out, 24. */
+  polygon_points?: number;
+  /** `bynn_segment`: distances and sizes in meters; left out, `true`. */
+  depth?: boolean;
   [setting: string]: unknown;
 }
 
@@ -412,8 +435,278 @@ export class UnknownReading {
   }
 }
 
+function has(r: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(r, key);
+}
+
+/** A number or `null`, the key present. */
+function nullableNumber(r: Record<string, unknown>, key: string): boolean {
+  return has(r, key) && (r[key] === null || isNumber(r[key]));
+}
+
+function isNumbers(v: unknown, count?: number): v is number[] {
+  return Array.isArray(v) && v.every(isNumber) && (count === undefined || v.length === count);
+}
+
+function isPoints(v: unknown): v is number[][] {
+  return Array.isArray(v) && v.every((p: unknown) => isNumbers(p, 2));
+}
+
+/** An object or `null`, the key present. */
+function nullableObject(r: Record<string, unknown>, key: string): boolean {
+  return has(r, key) && (r[key] === null || isObject(r[key]));
+}
+
+/**
+ * A `bynn_depth` reading of one image (Depth Vision): how far away things
+ * are, in meters. The distances are estimates from one picture, for decisions
+ * and planning, never a safety stop.
+ */
+export class DepthReading {
+  /** The id of the image read. */
+  readonly image: string;
+  /**
+   * Meters to the nearest obstacle straight ahead (the middle third of the
+   * picture, the floor or ground left out); `null` when none is found.
+   */
+  readonly ahead: number | null;
+  /** The same in 7 equal vertical strips of the picture, left to right, each meters or `null`. */
+  readonly directions: Array<number | null>;
+  /** `true` when a floor or ground was found and left out of `ahead` and `directions`. */
+  readonly ground: boolean;
+  readonly gridRows: number;
+  readonly gridCols: number;
+  /** The grid, row by row from the top left of the picture turned upright, each cell in meters. */
+  readonly grid: number[][];
+  /** The nearest distance in the picture. */
+  readonly depthMin: number;
+  /** The farthest distance in the picture. */
+  readonly depthMax: number;
+  /** The median distance in the picture. */
+  readonly depthMedian: number;
+  /** The picture's width in pixels, turned upright. */
+  readonly width: number;
+  /** The picture's height in pixels, turned upright. */
+  readonly height: number;
+  /** The reading as received. */
+  readonly raw: Record<string, unknown>;
+
+  constructor(raw: Record<string, unknown>) {
+    this.raw = raw;
+    this.image = raw.image as string;
+    this.ahead = raw.ahead as number | null;
+    this.directions = [...(raw.directions as Array<number | null>)];
+    this.ground = raw.ground as boolean;
+    this.gridRows = raw.grid_rows as number;
+    this.gridCols = raw.grid_cols as number;
+    this.grid = (raw.grid as number[][]).map((row) => [...row]);
+    this.depthMin = raw.depth_min as number;
+    this.depthMax = raw.depth_max as number;
+    this.depthMedian = raw.depth_median as number;
+    this.width = raw.width as number;
+    this.height = raw.height as number;
+  }
+
+  static wellFormed(r: Record<string, unknown>): boolean {
+    return (
+      typeof r.image === 'string' &&
+      nullableNumber(r, 'ahead') &&
+      Array.isArray(r.directions) &&
+      r.directions.every((d: unknown) => d === null || isNumber(d)) &&
+      typeof r.ground === 'boolean' &&
+      isInteger(r.grid_rows) &&
+      isInteger(r.grid_cols) &&
+      Array.isArray(r.grid) &&
+      r.grid.every((row: unknown) => isNumbers(row)) &&
+      isNumber(r.depth_min) &&
+      isNumber(r.depth_max) &&
+      isNumber(r.depth_median) &&
+      isInteger(r.width) &&
+      isInteger(r.height)
+    );
+  }
+}
+
+/**
+ * The opening a `bynn_segment` instance encloses, such as the hole of a gate,
+ * a doorway or a ring. Coordinates are fractions of the picture from its top left.
+ */
+export interface SegmentOpening {
+  /** Its outline, `[x, y]` points. */
+  polygon: number[][];
+  /** Its centre, `[x, y]`. */
+  centroid: number[];
+  /** Its width, a fraction of the picture's. */
+  width: number;
+  /** Its height, a fraction of the picture's. */
+  height: number;
+  /** `[dx, dy]`, from -1 to 1. */
+  offset: number[];
+  /** Its area, a fraction of the picture's. */
+  area: number;
+}
+
+/** How far away a `bynn_segment` instance is, in meters, with depth on. */
+export interface SegmentDepth {
+  /** The median distance inside its outline. */
+  median: number | null;
+  /** The median distance seen through its opening. */
+  openingMedian: number | null;
+  /** The median distance of its opening's rim. */
+  openingRimMedian: number | null;
+}
+
+/** A width and a height in meters. */
+export interface SegmentExtent {
+  width: number;
+  height: number;
+}
+
+/** How large a `bynn_segment` instance is, in meters, with depth on. */
+export interface SegmentSize {
+  width: number;
+  height: number;
+  /** Its opening's width and height, or `null`. */
+  opening: SegmentExtent | null;
+}
+
+/**
+ * One thing a `bynn_segment` reading found. Coordinates are fractions of the
+ * picture's width and height, from its top left, turned upright.
+ */
+export interface SegmentInstance {
+  /** The phrase it matched. */
+  label: string;
+  /** How well it matches, 0 to 1. */
+  score: number;
+  /** `[x1, y1, x2, y2]`, its top left and bottom right corners. */
+  box: number[];
+  /** Its outline, `[x, y]` points. */
+  polygon: number[][];
+  /** Its area, a fraction of the picture's. */
+  area: number;
+  /** Its centre, `[x, y]`. */
+  centroid: number[];
+  /** The opening it encloses, or `null`. */
+  opening: SegmentOpening | null;
+  /** Its distances in meters, or `null` with depth off. */
+  depth: SegmentDepth | null;
+  /** Its size in meters, or `null` with depth off. */
+  sizeM: SegmentSize | null;
+}
+
+function isSegmentInstance(e: unknown): boolean {
+  if (!isObject(e)) return false;
+  if (typeof e.label !== 'string' || !isNumber(e.score) || !isNumbers(e.box, 4) || !isPoints(e.polygon)) return false;
+  if (!isNumber(e.area) || !isNumbers(e.centroid, 2)) return false;
+  if (!nullableObject(e, 'opening') || !nullableObject(e, 'depth') || !nullableObject(e, 'size_m')) return false;
+  const o = e.opening as Record<string, unknown> | null;
+  if (o !== null && !(isPoints(o.polygon) && isNumbers(o.centroid, 2) && isNumber(o.width) && isNumber(o.height) && isNumbers(o.offset, 2) && isNumber(o.area))) {
+    return false;
+  }
+  const d = e.depth as Record<string, unknown> | null;
+  if (d !== null && !(nullableNumber(d, 'median') && nullableNumber(d, 'opening_median') && nullableNumber(d, 'opening_rim_median'))) return false;
+  const s = e.size_m as Record<string, unknown> | null;
+  if (s === null) return true;
+  if (!isNumber(s.width) || !isNumber(s.height) || !nullableObject(s, 'opening')) return false;
+  const x = s.opening as Record<string, unknown> | null;
+  return x === null || (isNumber(x.width) && isNumber(x.height));
+}
+
+function segmentInstance(e: Record<string, unknown>): SegmentInstance {
+  const o = e.opening as Record<string, unknown> | null;
+  const d = e.depth as Record<string, unknown> | null;
+  const s = e.size_m as Record<string, unknown> | null;
+  const x = s === null ? null : (s.opening as Record<string, unknown> | null);
+  const points = (v: unknown) => (v as number[][]).map((p) => [...p]);
+  return {
+    label: e.label as string,
+    score: e.score as number,
+    box: [...(e.box as number[])],
+    polygon: points(e.polygon),
+    area: e.area as number,
+    centroid: [...(e.centroid as number[])],
+    opening:
+      o === null
+        ? null
+        : {
+            polygon: points(o.polygon),
+            centroid: [...(o.centroid as number[])],
+            width: o.width as number,
+            height: o.height as number,
+            offset: [...(o.offset as number[])],
+            area: o.area as number,
+          },
+    depth:
+      d === null
+        ? null
+        : { median: d.median as number | null, openingMedian: d.opening_median as number | null, openingRimMedian: d.opening_rim_median as number | null },
+    sizeM:
+      s === null
+        ? null
+        : { width: s.width as number, height: s.height as number, opening: x === null ? null : { width: x.width as number, height: x.height as number } },
+  };
+}
+
+/**
+ * A `bynn_segment` reading of one image (Segment Vision): where the things
+ * the request's `prompt` names are in the picture.
+ */
+export class SegmentReading {
+  /** The id of the image read. */
+  readonly image: string;
+  /** The picture's width in pixels, turned upright. */
+  readonly width: number;
+  /** The picture's height in pixels, turned upright. */
+  readonly height: number;
+  /** The phrases searched for, cleaned as the request's `prompt` is. */
+  readonly prompts: string[];
+  /** What was found, best first; empty when nothing was, which is a reading. */
+  readonly instances: SegmentInstance[];
+  /** Where the distances come from (`bynn_depth`); `null` with depth off. */
+  readonly depthSource: string | null;
+  /** The horizontal field of view the sizes in meters assume, in degrees. */
+  readonly assumedHfovDeg: number;
+  /** The reading as received. */
+  readonly raw: Record<string, unknown>;
+
+  constructor(raw: Record<string, unknown>) {
+    this.raw = raw;
+    this.image = raw.image as string;
+    this.width = raw.width as number;
+    this.height = raw.height as number;
+    this.prompts = [...(raw.prompts as string[])];
+    this.instances = (raw.instances as Record<string, unknown>[]).map(segmentInstance);
+    this.depthSource = raw.depth_source as string | null;
+    this.assumedHfovDeg = raw.assumed_hfov_deg as number;
+  }
+
+  static wellFormed(r: Record<string, unknown>): boolean {
+    return (
+      typeof r.image === 'string' &&
+      isInteger(r.width) &&
+      isInteger(r.height) &&
+      Array.isArray(r.prompts) &&
+      r.prompts.every((p: unknown) => typeof p === 'string') &&
+      Array.isArray(r.instances) &&
+      r.instances.every(isSegmentInstance) &&
+      has(r, 'depth_source') &&
+      (r.depth_source === null || typeof r.depth_source === 'string') &&
+      isNumber(r.assumed_hfov_deg)
+    );
+  }
+}
+
 /** One reading of one image. */
-export type Reading = AgeReading | AiGeneratedReading | FaceDetectionReading | FaceRecognitionReading | OcrReading | UnknownReading;
+export type Reading =
+  | AgeReading
+  | AiGeneratedReading
+  | FaceDetectionReading
+  | FaceRecognitionReading
+  | OcrReading
+  | DepthReading
+  | SegmentReading
+  | UnknownReading;
 
 /** Parses one reading by the booster that made it. */
 export function parseReading(booster: string, raw: unknown): Reading {
@@ -423,6 +716,8 @@ export function parseReading(booster: string, raw: unknown): Reading {
     if (booster === 'face_detection' && FaceDetectionReading.wellFormed(raw)) return new FaceDetectionReading(raw);
     if (booster === 'face_recognition' && FaceRecognitionReading.wellFormed(raw)) return new FaceRecognitionReading(raw);
     if (booster === 'ocr' && OcrReading.wellFormed(raw)) return new OcrReading(raw);
+    if (booster === 'bynn_depth' && DepthReading.wellFormed(raw)) return new DepthReading(raw);
+    if (booster === 'bynn_segment' && SegmentReading.wellFormed(raw)) return new SegmentReading(raw);
   }
   return new UnknownReading(raw);
 }
@@ -467,6 +762,8 @@ export interface EvidenceByBooster {
   face_detection?: Evidence<FaceDetectionReading | UnknownReading>;
   face_recognition?: Evidence<FaceRecognitionReading | UnknownReading>;
   ocr?: Evidence<OcrReading | UnknownReading>;
+  bynn_depth?: Evidence<DepthReading | UnknownReading>;
+  bynn_segment?: Evidence<SegmentReading | UnknownReading>;
   [booster: string]: Evidence | undefined;
 }
 
