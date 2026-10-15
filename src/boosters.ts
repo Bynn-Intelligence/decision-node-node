@@ -308,6 +308,11 @@ function isFaceCount(v: unknown): v is number {
   return isInteger(v) && v >= 0;
 }
 
+/** A whole number of 0 or more: a grid's rows and columns, a picture's sides. */
+function isCount(v: unknown): v is number {
+  return isInteger(v) && v >= 0;
+}
+
 /**
  * A `face_detection` reading of one image: how many faces it shows and where.
  * `faces` can exceed `detections`, which holds at most 64; a picture with no
@@ -517,15 +522,15 @@ export class DepthReading {
       r.directions.length === DEPTH_DIRECTIONS &&
       r.directions.every((d: unknown) => d === null || isNumber(d)) &&
       typeof r.ground === 'boolean' &&
-      isInteger(r.grid_rows) &&
-      isInteger(r.grid_cols) &&
+      isCount(r.grid_rows) &&
+      isCount(r.grid_cols) &&
       Array.isArray(r.grid) &&
       r.grid.every((row: unknown) => isNumbers(row)) &&
       isNumber(r.depth_min) &&
       isNumber(r.depth_max) &&
       isNumber(r.depth_median) &&
-      isInteger(r.width) &&
-      isInteger(r.height)
+      isCount(r.width) &&
+      isCount(r.height)
     );
   }
 }
@@ -691,8 +696,8 @@ export class SegmentReading {
   static wellFormed(r: Record<string, unknown>): boolean {
     return (
       typeof r.image === 'string' &&
-      isInteger(r.width) &&
-      isInteger(r.height) &&
+      isCount(r.width) &&
+      isCount(r.height) &&
       Array.isArray(r.prompts) &&
       r.prompts.every((p: unknown) => typeof p === 'string') &&
       Array.isArray(r.instances) &&
