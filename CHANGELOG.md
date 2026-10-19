@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-10-19)
 
 Implements version 1.3 of the DecisionNode SDK specification (`SPEC_VERSION` is `"1.3"`).
 
