@@ -17,7 +17,7 @@ describe('package name', () => {
   it('is the one the README installs and imports', () => {
     const readme = read('README.md');
     expect(readme).toContain('npm install @decisionnode/sdk\n');
-    expect(readme).toContain('npm install github:Bynn-Intelligence/decision-node-node\n');
+    expect(readme).not.toContain('Not on npm yet');
     const imports = [...readme.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
     expect(imports.length).toBeGreaterThan(0);
     expect(new Set(imports)).toEqual(new Set(['@decisionnode/sdk']));
