@@ -59,7 +59,7 @@ export async function readme14() {
 
   const ids: string[] = await dn.uploadDocuments([Document.fromPath('./handbook.docx')]);
   await dn.collections.addDocument(kb.id, { document: Document.fromUploadId(ids[0]!), title: 'Handbook' });
-  await dn.collections.deleteFailedItems(kb.id);
+  await dn.collections.deleteFailed(kb.id);
   const page = await dn.collections.listChunks(kb.id, policy.id, { limit: 20 });
   page.chunks[0]?.byte_start;
   const item: CollectionItem = ready;

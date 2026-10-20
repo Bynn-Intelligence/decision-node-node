@@ -650,7 +650,7 @@ A document is `Document.fromText(text, format)` (`markdown`, the default, or `te
 Text and Markdown files under the client's `inlineThreshold` (512 KiB) that are UTF-8 are sent inline, in one call. Every other file is uploaded first and then named by its upload id. A file is converted to text, and once its text is ready only the text is kept: the original file is deleted. A document comes back `queued`, then `processing` (`stage` `extracting` for a converted file, `chunking`, `embedding`), then `ready` or `failed` (its `error` says why).
 
 - `wait: true` on `addDocument` or `replaceDocument` asks the server to hold the call up to 10 seconds and answer once the document is ready, else as it stands. Such a call waits 20 seconds per attempt unless you set the client's `timeout`.
-- `waitUntilReady(id, { itemId, timeout, pollInterval })` reads the document until it is `ready` or `failed` and returns it; without `itemId` it reads the knowledge base until nothing is `queued` or `processing` and returns it. It reads at once, then waits `pollInterval` (1 second), 1.5 times longer after each read up to 10 seconds, or the server's `Retry-After` when longer, and throws `TimeoutError` past `timeout` (5 minutes). A failed document is returned, not thrown.
+- `waitUntilReady(id, { itemId, timeout, pollInterval })` reads the document until it is `ready` or `failed` and returns it; without `itemId` it reads the knowledge base until nothing is `queued` or `processing` and returns it. It reads at once, then waits `pollInterval` (1 second), 1.5 times longer after each read up to 10 seconds, and throws `TimeoutError` once `timeout` (5 minutes, counted from the call) has passed. A failed document is returned, not thrown.
 
 ### Pin rules and scope a mission
 
@@ -719,7 +719,7 @@ for (const p of found.passages) console.log(p.title, p.score, p.text);
 | `listItems(id, { offset, limit, reference, reference_prefix })` | one page of documents, never their text |
 | `listChunks(id, itemId, { offset, limit })` | one page of a document's chunks: `chunk`, `heading`, `byte_start`, `byte_end`, `page_start`, `page_end`, `tokens`, `text` |
 | `deleteItem(id, itemId)` | the document, its text and its chunks deleted at once |
-| `deleteFailedItems(id)` | every failed document deleted, answering how many |
+| `deleteFailed(id)` | `DELETE /v1/collections/{id}/items?status=failed`: every failed document deleted, answering `{ deleted: n }`; a failed document otherwise stays visible with its `error` and counts toward nothing |
 | `dn.uploadDocuments(documents)` | 1 to 16 files uploaded ahead of time, one upload id each, for a later `Document.fromUploadId`; an upload not named within its hour expires |
 
 `addDocument`, `replaceDocument` and `updateItem` send an `Idempotency-Key`, a new UUID per call and the same on every attempt of it, so the API adds and bills a document once however often the call is tried. When a file this package uploaded is refused as expired, consumed, not found or incomplete, it is uploaded once more and the call sent again with a new key; an upload id you gave is never uploaded again.

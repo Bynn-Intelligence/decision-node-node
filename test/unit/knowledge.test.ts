@@ -342,7 +342,7 @@ describe('reading documents', () => {
     await dn.collections.getItem(COL, ITEM);
     expect((await dn.collections.getItem(COL, ITEM, { includeText: true })).text).toBe('# Rules');
     expect(await dn.collections.listChunks(COL, ITEM, { offset: 20, limit: 20 })).toEqual(page);
-    expect(await dn.collections.deleteFailedItems(COL)).toEqual({ deleted: 2 });
+    expect(await dn.collections.deleteFailed(COL)).toEqual({ deleted: 2 });
     expect(calls.map((c) => `${c.method} ${sent(c).path}`)).toEqual([
       `GET /v1/collections/${COL}/items/${ITEM}`,
       `GET /v1/collections/${COL}/items/${ITEM}?include=text`,

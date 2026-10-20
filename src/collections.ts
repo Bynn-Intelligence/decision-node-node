@@ -8,7 +8,7 @@
 
 import { KnowledgeReading } from './boosters.js';
 import { entry, localValidation, type Entry, type HeldLimits } from './checks.js';
-import { BadRequestError, ServerError, TimeoutError, localError, retryAfterSeconds } from './errors.js';
+import { BadRequestError, ServerError, TimeoutError, localError } from './errors.js';
 import { resolveDocument, type DocumentInput, type ResolvedDocument } from './knowledge.js';
 import type { Transport } from './transport.js';
 import { STALE_UPLOAD, type ImageInput, type ImagePlacer } from './uploads.js';
@@ -200,6 +200,13 @@ export interface SearchParams {
   topK?: number;
   pinned?: boolean;
   maxTokens?: number | 'auto';
+}
+
+/** The answer to `deleteFailed`. */
+export interface DeletedFailed {
+  /** How many failed documents were deleted. */
+  deleted: number;
+  [field: string]: unknown;
 }
 
 /** The parameters of `waitUntilReady`. */
@@ -726,17 +733,19 @@ export class Collections {
   }
 
   /**
-   * Deletes every failed document of a text collection
-   * (`DELETE /v1/collections/{id}/items?status=failed`), and answers how many
-   * were deleted, as sent.
+   * Deletes every failed document of a text collection, those whose newest
+   * version failed and that have no ready version
+   * (`DELETE /v1/collections/{id}/items?status=failed`), and answers how many,
+   * `{ deleted: n }` as sent. A repeat deletes nothing more, so it is retried
+   * as any call.
    */
-  async deleteFailedItems(collectionId: string, options: { signal?: AbortSignal } = {}): Promise<Record<string, unknown>> {
+  async deleteFailed(collectionId: string, options: { signal?: AbortSignal } = {}): Promise<DeletedFailed> {
     const { body } = await this.#ctx.transport.json({
       method: 'DELETE',
       path: `/v1/collections/${path(collectionId)}/items?status=failed`,
       signal: options.signal,
     });
-    return body;
+    return body as DeletedFailed;
   }
 
   /**
@@ -744,9 +753,9 @@ export class Collections {
    * `ready` or `failed` and returns it, whichever it is (a failed item's
    * `error` says why). Without, reads the collection until no item is
    * `queued` or `processing` and returns it. The first read is made at once;
-   * then it waits `pollInterval`, 1.5 times longer after each read up to 10 s,
-   * or the server's `Retry-After` when longer. Past `timeout` it throws
-   * `TimeoutError`.
+   * then it waits `pollInterval`, 1.5 times longer after each read up to 10 s.
+   * Each read is retried as any call. Past `timeout`, a deadline from the
+   * call, it throws `TimeoutError`.
    */
   waitUntilReady(collectionId: string, params: WaitParams & { itemId: string }): Promise<CollectionItem>;
   waitUntilReady(collectionId: string, params?: WaitParams & { itemId?: undefined }): Promise<Collection>;
@@ -766,22 +775,24 @@ export class Collections {
         ? `/v1/collections/${path(collectionId)}`
         : `/v1/collections/${path(collectionId)}/items/${path(itemId)}`;
     const transport = this.#ctx.transport;
+    // A deadline from the call: the time passed, or the waits made when they took less.
+    const started = monotonic();
     let waited = 0;
     for (;;) {
-      const { body, res } = await transport.json({ method: 'GET', path: at, signal });
+      const { body } = await transport.json({ method: 'GET', path: at, signal });
       if (itemId === undefined || itemId === null ? settled(body) : body.status === 'ready' || body.status === 'failed') {
         return body as CollectionItem | Collection;
       }
-      if (waited >= timeout) {
+      const spent = Math.max(monotonic() - started, waited);
+      if (spent >= timeout) {
         throw new TimeoutError(
           itemId === undefined || itemId === null
             ? `collection ${collectionId} was not ready within ${timeout} ms`
             : `item ${itemId} was not ready within ${timeout} ms`,
         );
       }
-      const server = retryAfterSeconds(res.headers);
-      // Never past the timeout: the last read is made when it runs out.
-      const wait = Math.min(server !== null ? Math.max(interval, server * 1000) : interval, timeout - waited);
+      // Never past the deadline: the last read is made when it runs out.
+      const wait = Math.min(interval, timeout - spent);
       await transport.sleep(wait, signal);
       waited += wait;
       interval = Math.min(interval * 1.5, MAX_WAIT_POLL_INTERVAL);
@@ -870,4 +881,9 @@ function withUpload(uploadId: string, title: string | undefined): Record<string,
   const body: Record<string, unknown> = { upload_id: uploadId };
   if (title !== undefined) body.title = title;
   return body;
+}
+
+/** Milliseconds from an arbitrary start, never going back. */
+function monotonic(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }

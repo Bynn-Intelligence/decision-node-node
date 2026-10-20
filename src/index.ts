@@ -142,6 +142,7 @@ export {
   type Collection,
   type CollectionItem,
   type CollectionItemPage,
+  type DeletedFailed,
   type DocumentFields,
   type DocumentParams,
   type ItemChunk,

@@ -313,7 +313,7 @@ export class DecisionNode {
   /**
    * Collections of faces and knowledge bases: `create`, `list`, `get`,
    * `delete`, `enroll`, `addDocument`, `replaceDocument`, `updateItem`,
-   * `getItem`, `listItems`, `listChunks`, `deleteItem`, `deleteFailedItems`,
+   * `getItem`, `listItems`, `listChunks`, `deleteItem`, `deleteFailed`,
    * `waitUntilReady` and `search`.
    */
   readonly collections: Collections;

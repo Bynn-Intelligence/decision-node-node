@@ -877,8 +877,8 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
       if ('limit' in args) p.limit = args.limit;
       return client.collections.listChunks(decode(args.collection_id, ctx), decode(args.item_id, ctx), p);
     }
-    case 'collections.delete_failed_items':
-      return client.collections.deleteFailedItems(decode(args.collection_id, ctx));
+    case 'collections.delete_failed':
+      return client.collections.deleteFailed(decode(args.collection_id, ctx));
     case 'collections.search': {
       const p: Json = {};
       const names: Record<string, string> = {
