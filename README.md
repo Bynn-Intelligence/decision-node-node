@@ -218,6 +218,7 @@ A booster is a specialist model that reads the request's images before the decis
 | `ocr` | Any picture | The picture's text, whole, or what the booster's `prompt` asks for |
 | `bynn_depth` (Depth Vision) | Any picture | How far away things are, in meters: the nearest obstacle straight ahead, seven directions from left to right, and a grid of the picture |
 | `bynn_segment` (Segment Vision) | Any picture | Where the things you name in words are: each one's outline, box and centre, and with depth on, its distance and size in meters |
+| `knowledge` (Knowledge) | The request's state and questions, never a picture | The passages of your own documents that apply to the request, as facts and rules to apply (see Knowledge) |
 
 ```ts
 import { AgeReading, Image, truth } from '@decisionnode/sdk';
@@ -273,6 +274,7 @@ await dn.decide({
 | `face_recognition` | `collection` (required): `celebrities`, or the id of one of your collections; `threshold`, 0 to 1 (0.5): a face scored below it is no match |
 | `ocr` | `prompt`: the model's instruction, at most 2,000 characters; left out, all the visible text |
 | `bynn_depth` | `grid_size`: the grid's cells per side, 2 to 16 (8) |
+| `knowledge` | `collection` (required): a knowledge base's id; `query`, `scope`, `match`, `filter`, `top_k`, `max_tokens`, `pinned`, `min_score`, `include_text`. Use the `knowledge()` builder (see Knowledge) |
 | `bynn_segment` | `prompt` (required): what to find, one phrase as a string or 1 to 4 phrases as an array, each at most 120 characters; `max_instances`, 1 to 16 (8); `min_score`, 0 to 1 (0.25); `polygon_points`, the points of each outline, 3 to 64 (24); `depth`, distances and sizes in meters (`true`) |
 
 ```ts
@@ -321,6 +323,7 @@ Boosters read images in every form (URL, inline or uploaded), and every question
 | `FaceRecognitionReading` | `image`, `faces` (how many faces were searched), `matches` (best first, each `box`, `score`, `collection`, `reference`, `name` for a public figure, `label` and `metadata` for your own item, `collectionName`), `collectionName` (your collection's name) |
 | `OcrReading` | `image`, `text` (the reading; empty when the picture shows no text), `truncated` (`true` when the reading was cut at the model's context limit) |
 | `DepthReading` | `image`, `ahead` (meters to the nearest obstacle straight ahead, the floor left out; `null` when none is found), `directions` (7 entries, left to right, each meters or `null`), `ground` (whether a floor or ground was found and left out), `gridRows`, `gridCols`, `grid` (rows of meters from the top left), `depthMin`, `depthMax`, `depthMedian`, `width`, `height` (the picture's size in pixels) |
+| `KnowledgeReading` | One per request, not per picture: `collection`, `collectionName`, `corpus`, `query`, `budget`, `scope`, `warnings`, `passages` (each a `KnowledgePassage`), `omitted`, `pendingItems`, `search`, `truncated` (see Knowledge) |
 | `SegmentReading` | `image`, `width`, `height`, `prompts` (the phrases searched for), `instances` (best first, each a `SegmentInstance`: `label`, `score`, `box` `[x1, y1, x2, y2]`, `polygon` `[[x, y], ...]`, `area`, `centroid` `[x, y]`, `opening` (the hole of a gate, a doorway or a ring: `polygon`, `centroid`, `width`, `height`, `offset`, `area`; or `null`), `depth` (`median`, `openingMedian`, `openingRimMedian`) and `sizeM` (meters: `width`, `height`, `opening`), both `null` with depth off), `depthSource`, `assumedHfovDeg`. Coordinates are fractions of the picture from its top left |
 | `UnknownReading` | `image` and `raw`: a reading of a booster this version does not know, or one with a field missing or of the wrong type. The decision does not fail |
 
@@ -599,8 +602,8 @@ const page = await dn.collections.listItems(staff.id, { reference_prefix: 'emp-'
 
 | Call | Sends |
 |---|---|
-| `create({ name, type })` | `POST /v1/collections`; `type` is `face`, the default |
-| `list()`, `get(id)`, `delete(id)` | the collections, one collection, its deletion |
+| `create({ name, type, scopeKey })` | `POST /v1/collections`; `type` is `face`, the default, or `text` for a knowledge base (see Knowledge) |
+| `list()`, `get(id)`, `delete(id)` | the collections, one collection, its deletion (a knowledge base still purging answers `{ id, status: 'purging' }`, also a success) |
 | `enroll(id, { image, reference, label, metadata })` | one face from one image, under your `reference`; the image is sent as a decision sends it |
 | `updateItem(id, itemId, { reference, label, metadata })` | `PATCH` with only the fields given: `label: null` clears the label, and `metadata` replaces the whole object (`{}` empties it) |
 | `listItems(id, { offset, limit, reference, reference_prefix })` | one page of items, filtered by an exact `reference` or a `reference_prefix` (not both); the page carries `total` and `total_capped` |
@@ -609,6 +612,143 @@ const page = await dn.collections.listItems(staff.id, { reference_prefix: 'emp-'
 `create`, `enroll` and `updateItem` send an `Idempotency-Key`, a new UUID per call and the same on every attempt of it, so the API does the work and bills it once however often the call is tried. They retry like any call, and also on a 409 `idempotency_in_progress` after its `Retry-After`; a 409 `idempotency_key_reused` is thrown and never retried.
 
 Checked before sending, as the API checks them: a `reference` of 1 to 64 of `A-Z a-z 0-9 _ . : -`, a `label` of 1 to 128 characters, and `metadata` as an object of at most 20 keys, each key 1 to 40 of `a-z`, `0-9` and `_`, each value a text of at most 500 characters, a number or true or false. Of an enrolled image only a URL is checked here; every other fault of the picture is the API's 422 `image_unreadable`.
+
+## Knowledge
+
+A knowledge base is a collection of type `text` that holds your own documents: a claims policy, house rules, a mission's special instructions. The `knowledge` booster finds the passages that apply to a decision and gives them to the model as facts and rules to apply, and the decision cites them.
+
+### Create a knowledge base and add documents
+
+```ts
+import { DecisionNode, Document } from '@decisionnode/sdk';
+
+const dn = new DecisionNode();
+
+const kb = await dn.collections.create({ name: 'Claims policy', type: 'text', scopeKey: 'mission' });
+
+// Markdown, inline: a string is a Markdown document.
+await dn.collections.addDocument(kb.id, {
+  document: '# Receipts\n\nReject any claim over 500 SEK without a receipt.',
+  title: 'Receipts rule',
+  reference: 'receipts-rule',
+  pinned: true,
+});
+
+// A PDF from a path: uploaded, then converted to text.
+const policy = await dn.collections.addDocument(kb.id, {
+  document: Document.fromPath('./claims-policy-2026.pdf'),
+  reference: 'policy-2026',
+});
+
+// Ingestion is asynchronous: wait until the document is ready (or failed).
+const ready = await dn.collections.waitUntilReady(kb.id, { itemId: policy.id });
+if (ready.status === 'failed') console.error(ready.error);
+```
+
+A document is `Document.fromText(text, format)` (`markdown`, the default, or `text`), `Document.fromPath(path)`, `Document.fromBytes(data)` (a `Uint8Array`, an `ArrayBuffer` or a `Blob`), `Document.fromStream(stream)` (a web `ReadableStream` or a Node `Readable`, read to its end before anything is sent) or `Document.fromUploadId(id)`; a plain string is Markdown. A file's type comes from `contentType`, else its name's extension, else its first bytes; DOCX, PPTX, XLSX and text need a name or a `contentType`. A file's name is a path's base name unless you give `filename`, and its stem is the default title.
+
+Text and Markdown files under the client's `inlineThreshold` (512 KiB) that are UTF-8 are sent inline, in one call. Every other file is uploaded first and then named by its upload id. A file is converted to text, and once its text is ready only the text is kept: the original file is deleted. A document comes back `queued`, then `processing` (`stage` `extracting` for a converted file, `chunking`, `embedding`), then `ready` or `failed` (its `error` says why).
+
+- `wait: true` on `addDocument` or `replaceDocument` asks the server to hold the call up to 10 seconds and answer once the document is ready, else as it stands. Such a call waits 20 seconds per attempt unless you set the client's `timeout`.
+- `waitUntilReady(id, { itemId, timeout, pollInterval })` reads the document until it is `ready` or `failed` and returns it; without `itemId` it reads the knowledge base until nothing is `queued` or `processing` and returns it. It reads at once, then waits `pollInterval` (1 second), 1.5 times longer after each read up to 10 seconds, or the server's `Retry-After` when longer, and throws `TimeoutError` past `timeout` (5 minutes). A failed document is returned, not thrown.
+
+### Pin rules and scope a mission
+
+A pinned document is given to every request that names the knowledge base, whatever the request asks: pin a rule that must always apply. `pinRank` (0 to 1,000) orders the pins, lowest first.
+
+The scope key (`mission` above) is a metadata key whose value scopes a document. A document with `metadata: { mission: 'M-42' }` is seen only by a request that names `scope: 'M-42'`; a document without it is global and seen by every request. A request without `scope` sees the global documents only, with the warning `scope_not_named`.
+
+```ts
+await dn.collections.addDocument(kb.id, {
+  document: '# Special instructions\n\nPhotos of damage taken after 2026-09-01 count as current.',
+  title: 'Mission M-42 brief',
+  metadata: { mission: 'M-42' },
+});
+```
+
+### A decision with knowledge
+
+```ts
+import { KnowledgeReading, knowledge, truth } from '@decisionnode/sdk';
+
+const d = await dn.decide({
+  state: { claim: { amount: '740.00', receipt: false }, mission: 'M-42' },
+  boosters: [knowledge(kb.id, { scope: 'M-42', require: true })],
+  questions: { approve: truth('Should the claim be approved under our policy?') },
+});
+
+const reading = d.evidence?.knowledge?.results[0];
+if (reading instanceof KnowledgeReading) {
+  for (const p of reading.passages) {
+    console.log(p.n, p.pinned, p.title, p.heading, p.score); // score is null for a pin
+  }
+}
+```
+
+`knowledge(collection, { query, scope, match, filter, topK, maxTokens, pinned, minScore, includeText, require })` is sent as `{ name: 'knowledge', require: true, options: { collection, ... } }`, each option only when given; the API checks them. `topK` (0 to 20, 4) is the most retrieved passages, pins not counted, and 0 gives the pins only. `maxTokens` is `'auto'` or 128 to 8,192. `match` (`{ region: 'SE' }`) and `filter` (a tree of `and`, `or` and conditions) narrow by metadata, never by the scope key. `includeText` adds each passage's text and needs a full-scope key.
+
+A passage cites its document: `item` (the document's id), `reference`, `title`, `heading`, `chunk`, and `byteStart` and `byteEnd`, UTF-8 byte offsets (end exclusive) into the document's stored text. Read that text with `getItem(id, itemId, { includeText: true })`, and encode it to UTF-8 before slicing by the offsets, since JavaScript strings count UTF-16 units:
+
+```ts
+const doc = await dn.collections.getItem(kb.id, p.item, { includeText: true });
+const bytes = new TextEncoder().encode(doc.text ?? '');
+const quoted = new TextDecoder().decode(bytes.subarray(p.byteStart, p.byteEnd));
+```
+
+`KnowledgeReading` also has `collectionName`, `corpus.version`, `query` (`source`, `tokens`), `budget` (`mode`, `tokens`, `entry`, `cause`), `scope` (`key`, `value`), `warnings` (`scope_not_named`, `over_budget`, `budget_floor`, `pinned_filtered`), `omitted` (passages left out, by cause), `pendingItems`, `search` and `truncated`, each as sent. A publishable key's passages carry ids and offsets only: `collectionName`, `title`, `heading` and `reference` are `null`. A reading with a required field missing or of the wrong type is an `UnknownReading`, and the decision does not fail.
+
+`require: true` guarantees that the search ran over a ready knowledge base and that every pin in scope reached the model. Without it, a reading that could not run leaves the decision to go ahead without passages, and `evidence` says why.
+
+### Search without a decision
+
+```ts
+const found = await dn.collections.search(kb.id, { query: 'receipts for claims over 500 SEK', scope: 'M-42', topK: 3 });
+for (const p of found.passages) console.log(p.title, p.score, p.text);
+```
+
+`search` takes `query`, `scope`, `match`, `filter`, `topK`, `pinned` and `maxTokens`, and returns a `KnowledgeReading` with every passage's text. It is billed as one knowledge call and needs a full-scope key.
+
+### Documents
+
+| Call | Sends |
+|---|---|
+| `addDocument(id, { document, title, reference, pinned, pinRank, label, metadata, wait })` | `POST /v1/collections/{id}/items`: a new document |
+| `replaceDocument(id, itemId, { ... })` | `PUT`: the document replaced whole; a new text, format or title is a new version, the old one serving until the new one is ready; the same text again changes nothing and is free |
+| `updateItem(id, itemId, { reference, label, metadata, pinned, pinRank, title })` | `PATCH` with only the fields given: applied at once, never re-embedded or billed; a new `title` is a new version |
+| `getItem(id, itemId, { includeText })` | one document, with its stored text when asked |
+| `listItems(id, { offset, limit, reference, reference_prefix })` | one page of documents, never their text |
+| `listChunks(id, itemId, { offset, limit })` | one page of a document's chunks: `chunk`, `heading`, `byte_start`, `byte_end`, `page_start`, `page_end`, `tokens`, `text` |
+| `deleteItem(id, itemId)` | the document, its text and its chunks deleted at once |
+| `deleteFailedItems(id)` | every failed document deleted, answering how many |
+| `dn.uploadDocuments(documents)` | 1 to 16 files uploaded ahead of time, one upload id each, for a later `Document.fromUploadId`; an upload not named within its hour expires |
+
+`addDocument`, `replaceDocument` and `updateItem` send an `Idempotency-Key`, a new UUID per call and the same on every attempt of it, so the API adds and bills a document once however often the call is tried. When a file this package uploaded is refused as expired, consumed, not found or incomplete, it is uploaded once more and the call sent again with a new key; an upload id you gave is never uploaded again.
+
+Checked before sending, as the API checks them: a `title` of 1 to 200 characters (required for a text and for a text file without a name), a text that is not empty, `format` `markdown` or `text`, a `scopeKey` of 1 to 40 of `a-z`, `0-9` and `_`, a `pinRank` from 0 to 1,000, `reference`, `label` and `metadata` as for faces, a file of at most 50 MB that is not empty and of a supported type, and a page's `offset` and `limit`.
+
+| Supported | |
+|---|---|
+| Files | Text (`.txt`), Markdown (`.md`), PDF, DOCX, PPTX, XLSX, HTML, and PNG, JPEG, TIFF and WebP images |
+| A file | At most 50 MB; a PDF at most 100 pages |
+| A document's text | At most 512 KiB, after conversion |
+
+A knowledge call costs USD 0.001, one a request whatever it retrieves, a call that gives only pins included; a call that timed out, failed or was skipped is free. Adding documents is billed per million newly embedded tokens, and storage per chunk a month.
+
+### Errors you may meet
+
+| Status, `errorType` | Error | When |
+|---|---|---|
+| 409 `knowledge_collection_empty` | `DecisionNodeError` with `details.items` and `details.failed` | A request with `require: true` on a knowledge base with nothing ready and nothing in progress |
+| 529 `booster_unavailable` | `OverloadedError` | A request with `require: true` while no document is ready yet but some are in progress. Retried after its `Retry-After` (5 seconds) |
+| 529 `booster_unavailable`, `details.reason` `ingestion_delayed` | `OverloadedError` | The same, while documents have waited past 15 minutes. Thrown at once with `Retry-After: 60`, never retried: when to try again is yours to decide |
+| 429 `rate_limit_error`, `details.reason` `ingest_queue_full` or `ingest_tokens_per_hour` | `RateLimitError` | Your workspace's ingestion rate. Retried like every 429, after its `Retry-After` |
+| 413 `item_too_large` | `RequestTooLargeError` | A text over 512 KiB once normalised |
+| 422 `invalid_text` | `ValidationError` | A text that is not UTF-8 or holds a NUL |
+| 402 `insufficient_credit` | `InsufficientCreditError` with `details` | Your balance cannot pay for the new text |
+| 409 `reference_taken`, `pinned_budget_exceeded`, `chunks_limit_reached` | `DecisionNodeError` with `details` | A `reference` another document holds (`details.item_id`), pins past the knowledge base's pinned limit, your workspace's chunk limit |
+| 400 `collection_type_mismatch` | `BadRequestError` | A face collection named where a knowledge base is meant, or the reverse |
+| 400 `upload_purpose_mismatch` | `BadRequestError` | An image upload named as a document, or a document upload named as an image |
+| 403 `key_scope_denied` | `PermissionDeniedError` | `search`, `includeText` or a document upload from a key that is not full-scope |
 
 ## Device keys
 
@@ -680,10 +820,10 @@ Every error is a `DecisionNodeError`, exported under that name, with `status`, `
 | 402 | `InsufficientCreditError` | |
 | 403 | `RefusalError` when the request was refused under the usage policy (`category`, `safety`); every other 403 is a `PermissionDeniedError`: a booster turned off for your workspace (`booster_not_enabled`), a suspended workspace, or a call outside the key's kind (`key_scope_denied`); for a publishable key also `origin_not_allowed` and `model_not_allowed`, its models in `details.allowed`; told apart by `errorType` | `category`, `safety` on a `RefusalError` |
 | 404 | `NotFoundError` | |
-| 413 | `RequestTooLargeError`: the body is over 25 MiB; never retried. Send large images as uploads | |
+| 413 | `RequestTooLargeError`: the body is over 25 MiB, or a document's text over 512 KiB (`item_too_large`); never retried. Send large images as uploads | |
 | 422 | `ValidationError` | `entries` |
 | 429 | `RateLimitError`; `SessionLimitError` when the key holds as many sessions as it may; `errorType` `key_spend_cap_reached` for a key past its daily spend cap, with `details` `resets_at`, `cap` and `spent`; a publishable key's per-address rate and calls in flight with `details.reason` `client_rate` or `in_flight` | `retryAfter` (seconds, at most 60) |
-| 529 | `OverloadedError`, also when a required booster failed (`booster_unavailable`) | `retryAfter` (seconds, at most 60) |
+| 529 | `OverloadedError`, also when a required booster failed (`booster_unavailable`); one whose `details.reason` is `ingestion_delayed` is thrown at once, never retried (see Knowledge) | `retryAfter` (seconds, at most 60) |
 | other 5xx, a 2xx whose body is not JSON, or a helper's own answer missing or malformed | `ServerError` | |
 | no response | `ConnectionError`, `TimeoutError` | |
 | any other status: 3xx, 405, 409, 410, 408 after its retries | `DecisionNodeError` itself | |
@@ -698,7 +838,7 @@ A failed upload to storage is a `DecisionNodeError` with the storage's status, `
 
 Only 200 to 299 is a success. Redirects are never followed, so your key is never sent to another URL or over plain HTTP: a 3xx is an error with its status. This holds for your own `fetch` too: it must be confirmed with `fetchHonoursManualRedirect: true`, it is called with `redirect: 'manual'`, and a response it reports as redirected is refused with a `DecisionNodeError`, its body never read (see "Your own `fetch`").
 
-Problems with your own arguments are not `DecisionNodeError`s: they throw JavaScript's own `TypeError` or `RangeError` (an empty question map, a bad base URL, timeout, `maxRetries` or `inlineThreshold`, a `concurrency` below 1, a malformed request in `decideMany` or a batch, a `pollInterval` below 10 seconds, a `fetch` without `fetchHonoursManualRedirect: true`, TLS checks turned off for an `https` base URL, an image file that cannot be read, a value that cannot be serialised as JSON). A request the API would refuse is not an argument problem: it throws the API's own error class (see "Checked before sending").
+Problems with your own arguments are not `DecisionNodeError`s: they throw JavaScript's own `TypeError` or `RangeError` (an empty question map, a bad base URL, timeout, `maxRetries` or `inlineThreshold`, a `concurrency` below 1, a malformed request in `decideMany` or a batch, a `pollInterval` below 10 seconds (100 ms for `waitUntilReady`), a `waitUntilReady` `timeout` that is not above 0, a document file that cannot be read, a `fetch` without `fetchHonoursManualRedirect: true`, TLS checks turned off for an `https` base URL, an image file that cannot be read, a value that cannot be serialised as JSON). A request the API would refuse is not an argument problem: it throws the API's own error class (see "Checked before sending").
 
 ```ts
 import { ContextLimitError, DecisionNodeError, RefusalError } from '@decisionnode/sdk';
@@ -715,9 +855,9 @@ try {
 
 ### Retries and timeouts
 
-Each attempt times out after 10 seconds (30 seconds for a request whose boosters name `ocr`, unless you set `timeout`), counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors, except that a decision naming `ocr` is never retried after a timeout (see Boosters). The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404, 413 and 422 are never retried, and neither is a 429 `key_spend_cap_reached`: the key's cap resets at 00:00 UTC, so it is thrown at once. A decision changes nothing on the server, so a retry is otherwise safe.
+Each attempt times out after 10 seconds (30 seconds for a request whose boosters name `ocr`, and 20 seconds for a document added or replaced with `wait`, unless you set `timeout`), counted from sending the request to the last byte of the response body. Requests are retried twice after the first attempt on 408, 429, every 5xx (529 included), timeouts and connection errors, except that a decision naming `ocr` is never retried after a timeout (see Boosters). The wait is the API's `retry-after-ms` when sent, else `Retry-After` in seconds or as an HTTP date, capped at 60 seconds; without either it is exponential backoff from 0.5 s with jitter, up to 8 s. 400, 401, 402, 403, 404, 413 and 422 are never retried, and neither is a 429 `key_spend_cap_reached`: the key's cap resets at 00:00 UTC, so it is thrown at once. A decision changes nothing on the server, so a retry is otherwise safe.
 
-Each storage PUT of an upload has its own timeout, `uploadTimeout` (60 seconds by default), apart from `timeout`, since a large image on a slow uplink needs longer than a decision. It is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. A `403` after the upload URL's 5 minutes have passed, by the client's clock, gets a fresh URL once; a second such `403` is thrown. Batch results stream in, and each read of the stream must bring data within the timeout.
+Each storage PUT of an upload has its own timeout, `uploadTimeout` (60 seconds by default for an image, 120 seconds for a document's file; set, it is used for both), apart from `timeout`, since a large image on a slow uplink needs longer than a decision. It is retried the same way on 5xx, timeouts and connection errors; a `412` on a retry means an earlier attempt stored the image, and counts as success. A `403` after the upload URL's 5 minutes have passed, by the client's clock, gets a fresh URL once; a second such `403` is thrown. Batch results stream in, and each read of the stream must bring data within the timeout.
 
 ## Safety
 
@@ -794,12 +934,12 @@ The name is sent as given, in `model` on any call or as the client's `model`. On
 | Base URL | `baseUrl` | `DECISIONNODE_BASE_URL` | `https://api.decisionnode.com` |
 | Model | `model` | `DECISIONNODE_MODEL` | `decisionnode-moe` |
 | Inline threshold | `inlineThreshold` | | `DEFAULT_INLINE_THRESHOLD`, 524,288 bytes |
-| Upload timeout | `uploadTimeout` | | `DEFAULT_UPLOAD_TIMEOUT`, 60,000 milliseconds per storage PUT |
+| Upload timeout | `uploadTimeout` | | `DEFAULT_UPLOAD_TIMEOUT`, 60,000 milliseconds per storage PUT of an image; `DEFAULT_DOCUMENT_UPLOAD_TIMEOUT`, 120,000, of a document's file |
 | Clock | `clock` | | `Date.now`; the time, in epoch milliseconds, that upload URLs and cached uploads are judged by |
 
 The client sends no telemetry and contacts nothing but the base URL, and the storage URLs the API returns for an upload. Besides your key, your own headers and the content headers, the only header it sends to the API is `User-Agent: decisionnode-node/<version>`. To see each attempt, pass `logger: (line) => console.debug(line)`: it prints the method, path, status, request id and time, never the state, the questions or the key.
 
-`SPEC_VERSION` holds the version of the DecisionNode SDK specification this package implements, `"1.3"`.
+`SPEC_VERSION` holds the version of the DecisionNode SDK specification this package implements, `"1.4"`.
 
 ## License
 

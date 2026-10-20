@@ -340,6 +340,8 @@ export class Transport {
       }
       // An enrollment with no price set: a retry never cures it, and it sends no Retry-After.
       if (res.status === 529 && detailReasonOf(res.text) === 'enrollment_unpriced') retryable = false;
+      // Knowledge waiting on an ingestion outage: the wait is the caller's to decide.
+      if (res.status === 529 && detailReasonOf(res.text) === 'ingestion_delayed') retryable = false;
       // A key past its daily spend cap: its Retry-After runs to the cap's reset at 00:00 UTC.
       if (res.status === 429 && errorTypeOf(res.text) === 'key_spend_cap_reached') retryable = false;
       if (retryable && attempt < this.maxRetries) {

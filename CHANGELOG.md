@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+Implements version 1.4 of the DecisionNode SDK specification (`SPEC_VERSION` is `"1.4"`): knowledge.
+
+- Knowledge bases: `collections.create({ name, type: 'text', scopeKey })` makes a collection of type `text`; `scopeKey` (1 to 40 of `a-z`, `0-9` and `_`) is sent only when given. `Collection` types a knowledge base's `scope_key`, `chunks`, `tokens`, `version`, `status_counts` and `pinned`, as sent. A knowledge base's delete may answer `{ id, status: 'purging' }`, also a success.
+- Documents: `Document.fromText(text, format)`, `fromPath`, `fromBytes` (a `Uint8Array`, an `ArrayBuffer` or a `Blob`), `fromStream` (a web `ReadableStream` or a Node `Readable`, read once into memory, stopping past 50 MB) and `fromUploadId`; a plain string is a Markdown document. A file's type comes from `contentType`, else its name's extension, else its first bytes.
+- `collections.addDocument(id, { document, title, reference, pinned, pinRank, label, metadata, wait })` and `replaceDocument(id, itemId, { ... })`: a text, and a text or Markdown file under `inlineThreshold` that is UTF-8 with no NUL, go inline (a file titled by its name's stem); every other file is uploaded with the knowledge purpose (`POST /v1/uploads` with `purpose` and `filename`, then the PUT) and named by `upload_id`. Each call sends an `Idempotency-Key`, the same on every attempt; a file this package uploaded that the API reports as expired, consumed, not found or incomplete is uploaded once more and the call sent again with a new key. `wait` sends `?wait=true`, and such a call waits 20 s per attempt unless the client's `timeout` is set.
+- `collections.updateItem` takes `pinned`, `pinRank` and `title` for a document. `getItem(id, itemId, { includeText })`, `listChunks(id, itemId, { offset, limit })` and `deleteFailedItems(id)` (`DELETE /v1/collections/{id}/items?status=failed`) are new. `CollectionItem` types a document's `title`, `format`, `pinned`, `pin_rank`, `source`, `file`, `status`, `stage`, `progress`, `serving`, `error`, `delayed`, `warnings`, `chunks`, `tokens`, `content_sha256`, `version`, `queued_at`, `ready_at` and `text`, as sent.
+- `collections.waitUntilReady(id, { itemId, timeout, pollInterval })` reads a document until it is `ready` or `failed` (a failed document is returned, not thrown), or a knowledge base until nothing is `queued` or `processing`: at once, then after `pollInterval` (1 s), 1.5 times longer each read up to 10 s, or the server's `Retry-After` when longer; `TimeoutError` past `timeout` (5 minutes). A `pollInterval` below 100 ms or a `timeout` not above 0 is a `RangeError`.
+- `collections.search(id, { query, scope, match, filter, topK, pinned, maxTokens })` returns a `KnowledgeReading` with every passage's text; its options are sent as given.
+- `client.uploadDocuments(documents)` uploads 1 to 16 documents ahead of time, a text as `text/markdown` or `text/plain`, and returns their upload ids. An image upload still sends no `purpose`.
+- The `knowledge` booster: `knowledge(collection, { query, scope, match, filter, topK, maxTokens, pinned, minScore, includeText, require })`, always the object form, each option only when given. `KnowledgeReading` (`collection`, `collectionName`, `corpus`, `query`, `budget`, `scope`, `warnings`, `passages`, `omitted`, `pendingItems`, `search`, `truncated`) and `KnowledgePassage` (`n`, `pinned`, `item`, `chunk`, `byteStart`, `byteEnd`, `reference`, `title`, `heading`, `tokens`, `score`, `lexical`, `rendered`, `text`); a reading or passage with a required field missing or of the wrong type is an `UnknownReading`.
+- Checked before sending, with the API's 422 entries: a collection `type` other than `face` or `text`, a `scopeKey` off its pattern, a missing or out-of-range `title`, an empty text, a `format` other than `markdown` or `text`, a `pinRank` outside 0 to 1,000, and a document's `reference`, `label` and `metadata`; a file over 50 MB, an empty file and a file of an unsupported type throw the presign's `BadRequestError`, nothing sent.
+- A 529 whose `details.reason` is `ingestion_delayed` is thrown at once and never retried; the other knowledge 529s are retried as every 529.
+- A document's storage PUT waits up to `DEFAULT_DOCUMENT_UPLOAD_TIMEOUT` (120 s) per attempt unless `uploadTimeout` is set.
+- Passes conformance suite 1.23.
+
 ## 0.3.0 (2026-10-19)
 
 Implements version 1.3 of the DecisionNode SDK specification (`SPEC_VERSION` is `"1.3"`).

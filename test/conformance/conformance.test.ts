@@ -25,6 +25,9 @@ import {
   FaceRecognitionReading,
   DepthReading,
   SegmentReading,
+  KnowledgeReading,
+  Document,
+  knowledge,
   type FaceBox,
   type Reading,
   type SegmentInstance,
@@ -309,8 +312,56 @@ function normReading(r: Reading): Json {
       instances: r.instances.map(normInstance),
     };
   }
+  if (r instanceof KnowledgeReading) return normKnowledge(r);
   if (r instanceof UnknownReading) return { kind: 'unknown', raw: r.raw };
   throw new Error(`a reading of class ${(r as object).constructor.name}`);
+}
+
+/**
+ * A typed sub-object as the cases write it: the wire's keys the reading was
+ * sent with, each from the SDK's typed value (a key it does not type as sent);
+ * null when the reading had none.
+ */
+function asSent(raw: unknown, typed: Json, names: Record<string, string>): Json {
+  if (raw === null || raw === undefined || typed === null) return null;
+  const out: Json = {};
+  for (const key of Object.keys(raw as Json)) out[key] = key in names ? typed[names[key]!] : (raw as Json)[key];
+  return out;
+}
+
+/** A knowledge reading as the cases write it: the wire's names, an empty field as null, warnings an empty list. */
+function normKnowledge(r: KnowledgeReading): Json {
+  const raw = r.raw;
+  return {
+    kind: 'knowledge',
+    collection: r.collection,
+    collection_name: r.collectionName,
+    corpus: asSent(raw.corpus, r.corpus, { version: 'version' }),
+    query: asSent(raw.query, r.query, { source: 'source', tokens: 'tokens', text: 'text' }),
+    budget: asSent(raw.budget, r.budget, { mode: 'mode', tokens: 'tokens', entry: 'entry', cause: 'cause' }),
+    scope: asSent(raw.scope, r.scope, { key: 'key', value: 'value' }),
+    warnings: r.warnings,
+    passages: r.passages.map((p) => ({
+      n: p.n,
+      pinned: p.pinned,
+      item: p.item,
+      reference: p.reference,
+      title: p.title,
+      heading: p.heading,
+      chunk: p.chunk,
+      byte_start: p.byteStart,
+      byte_end: p.byteEnd,
+      tokens: p.tokens,
+      score: p.score,
+      lexical: p.lexical,
+      rendered: p.rendered,
+      text: p.text,
+    })),
+    omitted: r.omitted,
+    pending_items: r.pendingItems,
+    search: asSent(raw.search, r.search, { plan: 'plan', candidates: 'candidates', fallback: 'fallback' }),
+    truncated: r.truncated,
+  };
 }
 
 /** A Segment Vision match as the cases write it: the wire's fields and shapes, an empty opening, depth or size_m (and the size's opening) as null. */
@@ -511,6 +562,27 @@ function decode(value: Json, ctx: Json = {}): Json {
                 : a.data_text;
           return new VideoFrame(a.t, data, a.media_type ?? undefined);
         }
+        case '$knowledge': {
+          // knowledge(collection, ...): each argument passed only when present.
+          const a = decode(raw, ctx);
+          const names: Record<string, string> = {
+            query: 'query',
+            scope: 'scope',
+            match: 'match',
+            filter: 'filter',
+            top_k: 'topK',
+            max_tokens: 'maxTokens',
+            pinned: 'pinned',
+            min_score: 'minScore',
+            include_text: 'includeText',
+            require: 'require',
+          };
+          const options: Json = {};
+          for (const [k, name] of Object.entries(names)) if (k in a) options[name] = a[k];
+          return knowledge(a.collection, options);
+        }
+        case '$document':
+          return documentOf(decode(raw, ctx));
         case '$image': {
           const a = decode(raw, ctx);
           if ('url' in a) return Image.fromUrl(a.id, a.url);
@@ -525,6 +597,55 @@ function decode(value: Json, ctx: Json = {}): Json {
   }
   if (Array.isArray(value)) return value.map((v) => decode(v, ctx));
   return value;
+}
+
+/** A `$document`: text, a file by path, bytes or a stream, or an upload id. */
+function documentOf(a: Json): Document {
+  const file: Json = {};
+  if ('content_type' in a) file.contentType = a.content_type;
+  if ('filename' in a) file.filename = a.filename;
+  if ('text' in a) return Document.fromText(a.text, a.format ?? undefined);
+  if ('upload_id' in a) return Document.fromUploadId(a.upload_id);
+  if ('path' in a && !('pad_to' in a)) return Document.fromPath(join(SUITE, a.path), file);
+  let data: Uint8Array;
+  if ('data_text' in a) data = new TextEncoder().encode(a.data_text);
+  else if ('repeat_text' in a) data = new TextEncoder().encode(String(a.repeat_text.repeat).repeat(a.repeat_text.times));
+  else if ('path' in a) {
+    data = new Uint8Array(readFileSync(join(SUITE, a.path)));
+    file.filename ??= a.path.split('/').pop();
+  } else data = new Uint8Array(Buffer.from(a.data_base64 ?? a.stream_base64, 'base64'));
+  if ('pad_to' in a && a.pad_to > data.length) {
+    const padded = new Uint8Array(a.pad_to);
+    padded.set(data);
+    data = padded;
+  }
+  if ('stream_base64' in a) {
+    const bytes = data;
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(bytes);
+        c.close();
+      },
+    });
+    return Document.fromStream(stream, file);
+  }
+  return Document.fromBytes(data, file);
+}
+
+/** A document call's fields, in the SDK's names: only those the case gives. */
+function documentParams(args: Json, ctx: Json): Json {
+  const p: Json = { document: decode(args.document, ctx) };
+  const names: Record<string, string> = {
+    title: 'title',
+    reference: 'reference',
+    pinned: 'pinned',
+    pin_rank: 'pinRank',
+    label: 'label',
+    metadata: 'metadata',
+    wait: 'wait',
+  };
+  for (const [k, name] of Object.entries(names)) if (k in args) p[name] = decode(args[k], ctx);
+  return p;
 }
 
 function withIndex(value: Json, i: number): Json {
@@ -709,6 +830,7 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
     case 'collections.create': {
       const p: Json = { name: decode(args.name, ctx) };
       if ('type' in args) p.type = decode(args.type, ctx);
+      if ('scope_key' in args) p.scopeKey = decode(args.scope_key, ctx);
       return client.collections.create(p);
     }
     case 'collections.list':
@@ -726,7 +848,8 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
     case 'collections.update_item': {
       // Only the fields the case gives; a label given as null clears it.
       const p: Json = {};
-      for (const k of ['reference', 'label', 'metadata']) if (k in args) p[k] = decode(args[k], ctx);
+      for (const k of ['reference', 'label', 'metadata', 'pinned', 'title']) if (k in args) p[k] = decode(args[k], ctx);
+      if ('pin_rank' in args) p.pinRank = decode(args.pin_rank, ctx);
       return client.collections.updateItem(decode(args.collection_id, ctx), decode(args.item_id, ctx), p);
     }
     case 'collections.list_items': {
@@ -739,6 +862,47 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
     }
     case 'collections.delete_item':
       return client.collections.deleteItem(decode(args.collection_id, ctx), decode(args.item_id, ctx));
+    case 'collections.add_document':
+      return client.collections.addDocument(decode(args.collection_id, ctx), documentParams(args, ctx));
+    case 'collections.replace_document':
+      return client.collections.replaceDocument(decode(args.collection_id, ctx), decode(args.item_id, ctx), documentParams(args, ctx));
+    case 'collections.get_item': {
+      const p: Json = {};
+      if ('include_text' in args) p.includeText = decode(args.include_text, ctx);
+      return client.collections.getItem(decode(args.collection_id, ctx), decode(args.item_id, ctx), p);
+    }
+    case 'collections.list_chunks': {
+      const p: Json = {};
+      if ('offset' in args) p.offset = args.offset;
+      if ('limit' in args) p.limit = args.limit;
+      return client.collections.listChunks(decode(args.collection_id, ctx), decode(args.item_id, ctx), p);
+    }
+    case 'collections.delete_failed_items':
+      return client.collections.deleteFailedItems(decode(args.collection_id, ctx));
+    case 'collections.search': {
+      const p: Json = {};
+      const names: Record<string, string> = {
+        query: 'query',
+        scope: 'scope',
+        match: 'match',
+        filter: 'filter',
+        top_k: 'topK',
+        pinned: 'pinned',
+        max_tokens: 'maxTokens',
+      };
+      for (const [k, name] of Object.entries(names)) if (k in args) p[name] = decode(args[k], ctx);
+      return client.collections.search(decode(args.collection_id, ctx), p);
+    }
+    case 'collections.wait_until_ready': {
+      // The case's times are seconds; the SDK's milliseconds.
+      const p: Json = {};
+      if ('item_id' in args) p.itemId = decode(args.item_id, ctx);
+      if ('timeout' in args) p.timeout = args.timeout * 1000;
+      if ('poll_interval' in args) p.pollInterval = args.poll_interval * 1000;
+      return client.collections.waitUntilReady(decode(args.collection_id, ctx), p);
+    }
+    case 'upload_documents':
+      return client.uploadDocuments(decode(args.documents, ctx));
     case 'usage.key':
       return client.usage.key(decode(args.key_id, ctx), usagePeriod(args, ctx));
     case 'usage.list':
@@ -1045,6 +1209,7 @@ const COLLECTION_KINDS = [
   'collections',
   'item',
   'item_page',
+  'chunk_page',
   'deleted',
   'key_usage',
   'usage_page',
@@ -1114,6 +1279,10 @@ async function runResponse(c: Json): Promise<void> {
     match(exp.session, normSession(result), 'session');
   } else if ('upload_ids' in exp) {
     if (!same(exp.upload_ids, result)) throw new Error(`upload_ids: expected ${short(exp.upload_ids)}, got ${short(result)}`);
+  } else if ('knowledge' in exp) {
+    // A search's answer.
+    if (!(result instanceof KnowledgeReading)) throw new Error(`knowledge: expected a KnowledgeReading, got ${short(result)}`);
+    match(exp.knowledge, normKnowledge(result), 'knowledge');
   } else if (COLLECTION_KINDS.some((k) => k in exp)) {
     const kind = COLLECTION_KINDS.find((k) => k in exp)!;
     checkCollectionResult(kind, exp[kind], result, kind);
@@ -1200,6 +1369,7 @@ async function checkOutcome(spec: Json, result: unknown, path: string): Promise<
     case 'collections':
     case 'item':
     case 'item_page':
+    case 'chunk_page':
     case 'deleted':
     case 'key_usage':
     case 'usage_page':
@@ -1211,6 +1381,10 @@ async function checkOutcome(spec: Json, result: unknown, path: string): Promise<
     case 'key_revoked':
     case 'keys_revoked':
       checkCollectionResult(spec.result, spec[spec.result] ?? (LIST_KINDS.includes(spec.result) ? undefined : {}), r, `${path}.${spec.result}`);
+      return;
+    case 'knowledge':
+      if (!(r instanceof KnowledgeReading)) throw new Error(`${path}: expected a KnowledgeReading, got ${short(r)}`);
+      match(spec.knowledge ?? {}, normKnowledge(r), `${path}.knowledge`);
       return;
     case 'session':
       if (!(r instanceof Session)) throw new Error(`${path}: expected a Session, got ${short(r)}`);

@@ -18,6 +18,7 @@ export type BoosterName =
   | 'ocr'
   | 'bynn_depth'
   | 'bynn_segment'
+  | 'knowledge'
   | (string & {});
 
 /**
@@ -32,7 +33,7 @@ export interface BoosterSettings {
    * array, each at most 120 characters; a string is always one phrase.
    */
   prompt?: string | readonly string[];
-  /** `face_recognition`: the collection to search, its id or a public collection's name. */
+  /** `face_recognition`: the collection to search, its id or a public collection's name. `knowledge` (required): the text collection's id. */
   collection?: string;
   /** `face_recognition`: the lowest match score it lists. */
   threshold?: number;
@@ -40,12 +41,28 @@ export interface BoosterSettings {
   grid_size?: number;
   /** `bynn_segment`: at most this many found, 1 to 16; left out, 8. */
   max_instances?: number;
-  /** `bynn_segment`: a match scored below it is left out, 0 to 1; left out, 0.25. */
+  /** `bynn_segment`: a match scored below it is left out, 0 to 1; left out, 0.25. `knowledge`: a similarity floor for passages found by meaning alone. */
   min_score?: number;
   /** `bynn_segment`: the points of each outline, 3 to 64; left out, 24. */
   polygon_points?: number;
   /** `bynn_segment`: distances and sizes in meters; left out, `true`. */
   depth?: boolean;
+  /** `knowledge`: replaces the query built from the request. */
+  query?: string;
+  /** `knowledge`: the value of the collection's scope key. */
+  scope?: string;
+  /** `knowledge`: metadata equality, a scalar equal, an array any of. */
+  match?: Record<string, unknown>;
+  /** `knowledge`: a typed filter tree. */
+  filter?: Record<string, unknown>;
+  /** `knowledge`: the most retrieved passages, pins not counted, 0 to 20. */
+  top_k?: number;
+  /** `knowledge`: the retrieved passages' token budget, `'auto'` or 128 to 8,192. */
+  max_tokens?: number | 'auto';
+  /** `knowledge`: `false` leaves the pinned items out. */
+  pinned?: boolean;
+  /** `knowledge`: each passage's text and the query's text in the reading. */
+  include_text?: boolean;
   [setting: string]: unknown;
 }
 
@@ -708,6 +725,197 @@ export class SegmentReading {
   }
 }
 
+/** The corpus a knowledge reading searched. */
+export interface KnowledgeCorpus {
+  /** The collection's corpus version, raised by every change a search can see. */
+  version: number | null;
+}
+
+/** The query a knowledge reading searched with. */
+export interface KnowledgeQuery {
+  /** `auto` (built from the request), `request` (`options.query`), `none` (`topK` 0), or a newer value as sent. */
+  source: 'auto' | 'request' | 'none' | (string & {}) | null;
+  tokens: number | null;
+  /** The query's text, only with `includeText` and on a search. */
+  text: string | null;
+}
+
+/** The retrieved passages' budget. */
+export interface KnowledgeBudget {
+  /** `auto`, or `fixed` for a number `maxTokens`. */
+  mode: 'auto' | 'fixed' | (string & {}) | null;
+  tokens: number | null;
+  /** `short` or `long`, the context entry; `null` when the reading did not run. */
+  entry: 'short' | 'long' | (string & {}) | null;
+  /** What took the room, or `null`: `state`, `images`, `other_boosters`, `pinned`, `fixed`, `require_floor`, or a newer value. */
+  cause: string | null;
+}
+
+/** The scope a knowledge reading saw. */
+export interface KnowledgeScope {
+  /** The collection's scope key. */
+  key: string | null;
+  /** The value named in `scope`, or `null` when none was. */
+  value: string | null;
+}
+
+/** How a knowledge reading searched. */
+export interface KnowledgeSearch {
+  plan: string | null;
+  candidates: number | null;
+  /** `true` when an exact rerun made up a short candidate list. */
+  fallback: boolean | null;
+}
+
+/**
+ * One passage of a knowledge reading. `byteStart` and `byteEnd` are UTF-8 byte
+ * offsets, end exclusive, into the item's stored text (`getItem` with
+ * `includeText`): encode that text to UTF-8 before slicing by them.
+ */
+export interface KnowledgePassage {
+  /** The passage's number in the block the model read, from 1. */
+  n: number;
+  /** `true` for a pinned item's passage, always included. */
+  pinned: boolean;
+  /** The item's id. */
+  item: string;
+  /** The chunk's number within the item. */
+  chunk: number;
+  byteStart: number;
+  byteEnd: number;
+  /** The item's reference; `null` for a publishable key's reading. */
+  reference: string | null;
+  /** The item's title; `null` for a publishable key's reading. */
+  title: string | null;
+  /** The chunk's heading path; `null` when it has none, and for a publishable key's reading. */
+  heading: string | null;
+  tokens: number | null;
+  /** The similarity, 4 decimals as sent; `null` for a pin. */
+  score: number | null;
+  /** `true` when it matched on words. */
+  lexical: boolean | null;
+  /** `false` when the worker left it out to fit; `null` on a search's passages. */
+  rendered: boolean | null;
+  /** The passage's text, only with `includeText`, and always on a search. */
+  text: string | null;
+  /** The passage as received. */
+  raw: Record<string, unknown>;
+}
+
+/** A field as sent, `null` when absent. */
+function asSent<T>(v: unknown): T | null {
+  return v === undefined ? null : (v as T | null);
+}
+
+/** Absent, `null`, or of the type `ok` accepts. */
+function optional(r: Record<string, unknown>, key: string, ok: (v: unknown) => boolean): boolean {
+  return r[key] === undefined || r[key] === null || ok(r[key]);
+}
+
+const isString = (v: unknown): boolean => typeof v === 'string';
+const isBoolean = (v: unknown): boolean => typeof v === 'boolean';
+
+function isPassage(p: unknown): p is Record<string, unknown> {
+  return (
+    isObject(p) &&
+    isInteger(p.n) &&
+    typeof p.pinned === 'boolean' &&
+    typeof p.item === 'string' &&
+    isInteger(p.chunk) &&
+    isInteger(p.byte_start) &&
+    isInteger(p.byte_end) &&
+    ['reference', 'title', 'heading', 'text'].every((k) => optional(p, k, isString)) &&
+    optional(p, 'score', isNumber) &&
+    optional(p, 'tokens', isInteger) &&
+    optional(p, 'lexical', isBoolean) &&
+    optional(p, 'rendered', isBoolean)
+  );
+}
+
+function passage(p: Record<string, unknown>): KnowledgePassage {
+  return {
+    n: p.n as number,
+    pinned: p.pinned as boolean,
+    item: p.item as string,
+    chunk: p.chunk as number,
+    byteStart: p.byte_start as number,
+    byteEnd: p.byte_end as number,
+    reference: asSent(p.reference),
+    title: asSent(p.title),
+    heading: asSent(p.heading),
+    tokens: asSent(p.tokens),
+    score: asSent(p.score),
+    lexical: asSent(p.lexical),
+    rendered: asSent(p.rendered),
+    text: asSent(p.text),
+    raw: p,
+  };
+}
+
+/**
+ * A `knowledge` reading: the passages of a workspace's own documents given to
+ * the decision, pinned first, and how they were found. A search answers with
+ * the same reading, each passage's text included.
+ */
+export class KnowledgeReading {
+  /** The collection's id. */
+  readonly collection: string;
+  /** The collection's name; `null` for a publishable key's reading. */
+  readonly collectionName: string | null;
+  readonly corpus: KnowledgeCorpus | null;
+  readonly query: KnowledgeQuery | null;
+  readonly budget: KnowledgeBudget | null;
+  /** The scope seen, or `null` on a collection without a scope key. */
+  readonly scope: KnowledgeScope | null;
+  /** `scope_not_named`, `over_budget`, `budget_floor`, `pinned_filtered`, or a newer value; empty when none. */
+  readonly warnings: string[];
+  /** In the block's order, pinned first. */
+  readonly passages: KnowledgePassage[];
+  /** The passages left out, by cause, as sent (`below_min_score`, `per_item_cap`, `over_budget`, ...); `null` when absent. */
+  readonly omitted: Record<string, number> | null;
+  /** Items not ready yet. */
+  readonly pendingItems: number | null;
+  readonly search: KnowledgeSearch | null;
+  /** `true` when a passage was dropped to fit the context; `null` on a search's reading. */
+  readonly truncated: boolean | null;
+  /** The reading as received. */
+  readonly raw: Record<string, unknown>;
+
+  constructor(raw: Record<string, unknown>) {
+    this.raw = raw;
+    this.collection = raw.collection as string;
+    this.collectionName = asSent(raw.collection_name);
+    // The objects' fields as sent, each `null` when absent.
+    const corpus = raw.corpus as Record<string, unknown> | null | undefined;
+    this.corpus = isObject(corpus) ? { version: asSent(corpus.version) } : null;
+    const q = raw.query as Record<string, unknown> | null | undefined;
+    this.query = isObject(q) ? { source: asSent(q.source), tokens: asSent(q.tokens), text: asSent(q.text) } : null;
+    const b = raw.budget as Record<string, unknown> | null | undefined;
+    this.budget = isObject(b) ? { mode: asSent(b.mode), tokens: asSent(b.tokens), entry: asSent(b.entry), cause: asSent(b.cause) } : null;
+    const sc = raw.scope as Record<string, unknown> | null | undefined;
+    this.scope = isObject(sc) ? { key: asSent(sc.key), value: asSent(sc.value) } : null;
+    this.warnings = Array.isArray(raw.warnings) ? [...(raw.warnings as string[])] : [];
+    this.passages = (raw.passages as Record<string, unknown>[]).map(passage);
+    this.omitted = isObject(raw.omitted) ? ({ ...raw.omitted } as Record<string, number>) : null;
+    this.pendingItems = asSent(raw.pending_items);
+    const se = raw.search as Record<string, unknown> | null | undefined;
+    this.search = isObject(se) ? { plan: asSent(se.plan), candidates: asSent(se.candidates), fallback: asSent(se.fallback) } : null;
+    this.truncated = asSent(raw.truncated);
+  }
+
+  static wellFormed(r: Record<string, unknown>): boolean {
+    return (
+      typeof r.collection === 'string' &&
+      Array.isArray(r.passages) &&
+      r.passages.every(isPassage) &&
+      optional(r, 'collection_name', isString) &&
+      optional(r, 'truncated', isBoolean) &&
+      optional(r, 'warnings', (w) => Array.isArray(w) && w.every(isString)) &&
+      ['corpus', 'query', 'budget', 'scope', 'omitted', 'search'].every((k) => optional(r, k, isObject))
+    );
+  }
+}
+
 /** One reading of one image. */
 export type Reading =
   | AgeReading
@@ -717,6 +925,7 @@ export type Reading =
   | OcrReading
   | DepthReading
   | SegmentReading
+  | KnowledgeReading
   | UnknownReading;
 
 /** Parses one reading by the booster that made it. */
@@ -729,6 +938,7 @@ export function parseReading(booster: string, raw: unknown): Reading {
     if (booster === 'ocr' && OcrReading.wellFormed(raw)) return new OcrReading(raw);
     if (booster === 'bynn_depth' && DepthReading.wellFormed(raw)) return new DepthReading(raw);
     if (booster === 'bynn_segment' && SegmentReading.wellFormed(raw)) return new SegmentReading(raw);
+    if (booster === 'knowledge' && KnowledgeReading.wellFormed(raw)) return new KnowledgeReading(raw);
   }
   return new UnknownReading(raw);
 }
@@ -775,6 +985,7 @@ export interface EvidenceByBooster {
   ocr?: Evidence<OcrReading | UnknownReading>;
   bynn_depth?: Evidence<DepthReading | UnknownReading>;
   bynn_segment?: Evidence<SegmentReading | UnknownReading>;
+  knowledge?: Evidence<KnowledgeReading | UnknownReading>;
   [booster: string]: Evidence | undefined;
 }
 

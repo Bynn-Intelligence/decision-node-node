@@ -41,9 +41,10 @@ import {
   type RawResponse,
   type SleepFn,
 } from './transport.js';
-import { DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT, ImagePlacer, MAX_UPLOAD_FILES, STALE_UPLOAD, type ImageInput } from './uploads.js';
+import { documentFile, type DocumentInput } from './knowledge.js';
+import { DEFAULT_DOCUMENT_UPLOAD_TIMEOUT, DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT, ImagePlacer, MAX_UPLOAD_FILES, STALE_UPLOAD, type ImageInput } from './uploads.js';
 
-export { DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT };
+export { DEFAULT_DOCUMENT_UPLOAD_TIMEOUT, DEFAULT_INLINE_THRESHOLD, DEFAULT_UPLOAD_TIMEOUT };
 export type { ClockFn, FetchLike, ImageInput, SleepFn };
 
 export const DEFAULT_BASE_URL = 'https://api.decisionnode.com';
@@ -71,8 +72,9 @@ export interface ClientOptions {
   model?: string | null;
   /**
    * Milliseconds per attempt, from sending the request to the last byte of the
-   * body. Above 0. Default 10000, and 30000 for a decision whose boosters name
-   * `ocr`; a timeout set here is used as given for every call.
+   * body. Above 0. Default 10000, 30000 for a decision whose boosters name
+   * `ocr`, and 20000 for a document added or replaced with `wait`; a timeout
+   * set here is used as given for every call.
    */
   timeout?: number;
   /** Retries after the first attempt, a whole number 0 or more. Default 2. */
@@ -112,7 +114,9 @@ export interface ClientOptions {
   /**
    * Milliseconds one storage PUT of an upload may take, apart from `timeout`:
    * a large image on a slow uplink needs longer than a decision. Above 0.
-   * Default `DEFAULT_UPLOAD_TIMEOUT` (60,000).
+   * Default `DEFAULT_UPLOAD_TIMEOUT` (60,000) for an image, and
+   * `DEFAULT_DOCUMENT_UPLOAD_TIMEOUT` (120,000) for a document's file, which
+   * is up to 50 MB; set here, it is used for both.
    */
   uploadTimeout?: number;
   /**
@@ -306,7 +310,12 @@ export class DecisionNode {
   readonly uploadTimeout: number;
   /** The Batch API: `create`, `add`, `finalize`, `get`, `list`, `results`, `cancel` and `run`. */
   readonly batches: Batches;
-  /** Collections of faces: `create`, `list`, `get`, `delete`, `enroll`, `listItems` and `deleteItem`. */
+  /**
+   * Collections of faces and knowledge bases: `create`, `list`, `get`,
+   * `delete`, `enroll`, `addDocument`, `replaceDocument`, `updateItem`,
+   * `getItem`, `listItems`, `listChunks`, `deleteItem`, `deleteFailedItems`,
+   * `waitUntilReady` and `search`.
+   */
   readonly collections: Collections;
   /** Per-key usage: `key`, `list` and `all`. */
   readonly usage: PerKeyUsage;
@@ -316,6 +325,8 @@ export class DecisionNode {
   readonly #placer: ImagePlacer;
   /** Whether the caller set `timeout`: a set timeout is used as given, also for a decision naming `ocr`. */
   readonly #timeoutGiven: boolean;
+  /** Milliseconds one storage PUT attempt of a document may take. */
+  readonly #documentUploadTimeout: number;
   /** Each model's `/v1/models` entry, once `models()` has been called: limits only that list states. */
   #held = new Map<string, Record<string, unknown>>();
 
@@ -378,10 +389,14 @@ export class DecisionNode {
       model: this.model,
       limits: (model) => this.#limits(model),
     });
+    this.#documentUploadTimeout = options.uploadTimeout ?? DEFAULT_DOCUMENT_UPLOAD_TIMEOUT;
     this.collections = new Collections({
       transport: this.#transport,
       placer: this.#placer,
       limits: () => this.#limits(),
+      inlineThreshold,
+      documentUploadTimeout: this.#documentUploadTimeout,
+      timeoutGiven: this.#timeoutGiven,
     });
     this.usage = new PerKeyUsage({ transport: this.#transport });
     this.keys = new Keys({ transport: this.#transport });
@@ -658,6 +673,23 @@ export class DecisionNode {
     if (plan === null) return [];
     const locals = plan.slots.flatMap((s) => ('local' in s ? [s.local] : []));
     return this.#placer.upload(locals, options.signal);
+  }
+
+  /**
+   * Uploads 1 to 16 documents for a knowledge base, whatever their type and
+   * size, and returns one `upload_id` each, in order: one presign with the
+   * knowledge purpose, the PUTs in parallel. A text is uploaded as
+   * `text/markdown`, or `text/plain` by its format. Name an id later with
+   * `Document.fromUploadId`; an upload not named within its hour expires.
+   * Nothing is cached: each call uploads.
+   */
+  async uploadDocuments(documents: readonly DocumentInput[], options: RequestOptions = {}): Promise<string[]> {
+    if (!Array.isArray(documents)) throw new TypeError('documents must be an array');
+    if (documents.length === 0 || documents.length > MAX_UPLOAD_FILES) {
+      throw localError(BadRequestError, `files: 1 to ${MAX_UPLOAD_FILES} files, got ${documents.length}.`);
+    }
+    const files = await Promise.all(documents.map((d, i) => documentFile(d, i)));
+    return this.#placer.uploadKnowledge(files, options.signal, this.#documentUploadTimeout);
   }
 
   /**

@@ -1,7 +1,7 @@
 // Runs the built package against the conformance mock in any runtime with
 // fetch: Node, Deno or Bun. Needs DECISIONNODE_BASE_URL (the mock) and
 // DECISIONNODE_CONFORMANCE_DIR (for an image fixture).
-import { ContextLimitError, DecisionNode, Image, ValidationError, choice, number, score, truth } from '../../dist/index.js';
+import { ContextLimitError, DecisionNode, Document, Image, KnowledgeReading, ValidationError, choice, knowledge, number, score, truth } from '../../dist/index.js';
 
 const env = (name) => (globalThis.Deno ? globalThis.Deno.env.get(name) : globalThis.process.env[name]);
 const suite = env('DECISIONNODE_CONFORMANCE_DIR');
@@ -65,5 +65,17 @@ const run = await new DecisionNode({ apiKey: 'dn_test_runtime', sleep: async () 
 );
 const lines = await run.results.toArray();
 if (run.batch.state !== 'completed' || lines.length !== 1 || lines[0].status !== 200) fail('batch');
+
+// Knowledge: a PDF read from a path and uploaded, waited for, searched and used in a decision.
+const kn = new DecisionNode({ apiKey: 'dn_test_runtime', sleep: async () => {} });
+const kb = await kn.collections.create({ name: 'Claims policy', type: 'text' });
+const doc = await kn.collections.addDocument(kb.id, { document: Document.fromPath(`${suite}/fixtures/knowledge/claims-policy.pdf`) });
+const ready = await kn.collections.waitUntilReady(kb.id, { itemId: doc.id });
+if (ready.status !== 'ready') fail(`document ${ready.status}`);
+const found = await kn.collections.search(kb.id, { query: 'receipts' });
+if (!(found instanceof KnowledgeReading)) fail('search');
+const kd = await kn.decide({ state: { claim: 740 }, questions: { approve: truth('Approve?') }, boosters: [knowledge(kb.id)] });
+if (!(kd.evidence?.knowledge?.results[0] instanceof KnowledgeReading)) fail('knowledge reading');
+await kn.collections.delete(kb.id);
 
 console.log('runtime smoke: ok');

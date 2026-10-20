@@ -14,6 +14,9 @@ import { backoffSeconds, isLoopbackHost, isSuccess, serialise, type Transport } 
 /** Milliseconds one storage PUT attempt may take, apart from the API attempt's timeout. */
 export const DEFAULT_UPLOAD_TIMEOUT = 60_000;
 
+/** Milliseconds one storage PUT attempt of a document may take when the client sets no `uploadTimeout`: a file is up to 50 MB. */
+export const DEFAULT_DOCUMENT_UPLOAD_TIMEOUT = 120_000;
+
 /** Local images of one request totalling under this many bytes go inline as base64; at or above it they are uploaded. */
 export const DEFAULT_INLINE_THRESHOLD = 524_288;
 
@@ -47,6 +50,13 @@ export interface Placed {
   wires: WireImage[];
   /** The upload ids this SDK placed in the request, from its cache or a new upload. */
   placed: Set<string>;
+}
+
+/** A document's file, ready to upload with the knowledge purpose. */
+export interface KnowledgeFile {
+  bytes: Uint8Array;
+  contentType: string;
+  filename: string | null;
 }
 
 interface Presigned {
@@ -253,18 +263,10 @@ export class ImagePlacer {
   }
 
   /** One presign for the files; the URLs live `expires_in` seconds (300) from the answer, by the client's clock. */
-  async #presign(items: Array<[string, LocalImage]>, signal: AbortSignal | undefined): Promise<{ uploads: Presigned[]; urlsExpire: number }> {
-    const files = await Promise.all(
-      items.map(async ([, l]) => ({
-        content_type: l.mediaType,
-        byte_size: l.bytes.length,
-        checksum: toBase64(md5(l.bytes)),
-        sha256: toBase64(await sha256(l.bytes)),
-      })),
-    );
+  async #presign(files: Array<Record<string, unknown>>, signal: AbortSignal | undefined): Promise<{ uploads: Presigned[]; urlsExpire: number }> {
     const { body, res } = await this.#transport.json({ method: 'POST', path: '/v1/uploads', body: serialise({ files }), signal });
     const uploads = Array.isArray(body.uploads) ? (body.uploads as Presigned[]) : [];
-    if (uploads.length !== items.length || uploads.some((u) => !u || typeof u.upload_id !== 'string' || typeof u.url !== 'string')) {
+    if (uploads.length !== files.length || uploads.some((u) => !u || typeof u.upload_id !== 'string' || typeof u.url !== 'string')) {
       throw new ServerError('the upload answer does not hold one upload per file', {
         status: res.status,
         requestId: res.headers['x-request-id'] ?? null,
@@ -276,21 +278,75 @@ export class ImagePlacer {
     return { uploads, urlsExpire: (await this.#transport.now()) + expiresIn * 1000 };
   }
 
-  async #presignAndPut(items: Array<[string, LocalImage]>, signal: AbortSignal | undefined): Promise<Map<string, string>> {
-    const { uploads, urlsExpire } = await this.#presign(items, signal);
-    const done = await Promise.all(
-      items.map(async (item, i) => {
+  /**
+   * One presign for the files, then the PUTs in parallel. A PUT refused with
+   * 403 once the URL's time has passed presigns that file again, once; a 403
+   * before it is a refusal.
+   */
+  async #presignAndPutFiles(
+    files: Array<Record<string, unknown>>,
+    bytes: readonly Uint8Array[],
+    signal: AbortSignal | undefined,
+    timeout: number,
+  ): Promise<Presigned[]> {
+    const { uploads, urlsExpire } = await this.#presign(files, signal);
+    return Promise.all(
+      files.map(async (file, i) => {
         let up = uploads[i]!;
         try {
-          await this.#put(up, item[1].bytes, signal);
+          await this.#put(up, bytes[i]!, signal, timeout);
         } catch (err) {
-          // A 403 once the URL's time has passed means presign again, once; a 403 before it is a refusal.
           if (!(err instanceof DecisionNodeError) || err.status !== 403 || (await this.#transport.now()) < urlsExpire) throw err;
-          up = (await this.#presign([item], signal)).uploads[0]!;
-          await this.#put(up, item[1].bytes, signal);
+          up = (await this.#presign([file], signal)).uploads[0]!;
+          await this.#put(up, bytes[i]!, signal, timeout);
         }
         return up;
       }),
+    );
+  }
+
+  /**
+   * Uploads documents' files with the knowledge purpose, never from or into
+   * the image cache, and returns one upload id each, in order. `timeout` is
+   * each PUT attempt's.
+   */
+  async uploadKnowledge(files: readonly KnowledgeFile[], signal: AbortSignal | undefined, timeout: number): Promise<string[]> {
+    const specs = await Promise.all(
+      files.map(async (f) => {
+        const spec: Record<string, unknown> = {
+          purpose: 'knowledge',
+          content_type: f.contentType,
+          byte_size: f.bytes.length,
+          checksum: toBase64(md5(f.bytes)),
+          sha256: toBase64(await sha256(f.bytes)),
+        };
+        if (f.filename !== null) spec.filename = f.filename;
+        return spec;
+      }),
+    );
+    const done = await this.#presignAndPutFiles(
+      specs,
+      files.map((f) => f.bytes),
+      signal,
+      timeout,
+    );
+    return done.map((up) => up.upload_id);
+  }
+
+  async #presignAndPut(items: Array<[string, LocalImage]>, signal: AbortSignal | undefined): Promise<Map<string, string>> {
+    const files = await Promise.all(
+      items.map(async ([, l]) => ({
+        content_type: l.mediaType,
+        byte_size: l.bytes.length,
+        checksum: toBase64(md5(l.bytes)),
+        sha256: toBase64(await sha256(l.bytes)),
+      })),
+    );
+    const done = await this.#presignAndPutFiles(
+      files,
+      items.map(([, l]) => l.bytes),
+      signal,
+      this.#transport.uploadTimeout,
     );
     const out = new Map<string, string>();
     items.forEach(([key], i) => {
@@ -308,7 +364,7 @@ export class ImagePlacer {
    * Retried on 5xx, timeouts and connection errors; a 412 on a retry means an
    * earlier attempt stored the object, which is written once.
    */
-  async #put(up: Presigned, bytes: Uint8Array, signal: AbortSignal | undefined): Promise<void> {
+  async #put(up: Presigned, bytes: Uint8Array, signal: AbortSignal | undefined, timeout: number): Promise<void> {
     let url: URL;
     try {
       url = new URL(up.url);
@@ -325,7 +381,7 @@ export class ImagePlacer {
       let status: number;
       let text: string;
       try {
-        const res = await transport.send(up.method || 'PUT', up.url, headers, bytes, signal, false, transport.uploadTimeout);
+        const res = await transport.send(up.method || 'PUT', up.url, headers, bytes, signal, false, timeout);
         if (res.redirected) {
           throw new DecisionNodeError('the storage answered with a redirect, which is not followed', {
             status: res.status || null,

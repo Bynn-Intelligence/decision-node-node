@@ -2,4 +2,4 @@
 export const VERSION = '0.3.1';
 
 /** The version of the DecisionNode SDK surface this package implements. */
-export const SPEC_VERSION = '1.3';
+export const SPEC_VERSION = '1.4';

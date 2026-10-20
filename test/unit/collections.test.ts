@@ -195,10 +195,10 @@ describe('collections: local checks', () => {
     return e.entries;
   }
 
-  it('refuses a type other than face and a name not 1 to 80 characters, sending nothing', async () => {
+  it('refuses a type other than face or text and a name not 1 to 80 characters, sending nothing', async () => {
     const { dn, calls } = client([{ status: 201, body: COLLECTION }]);
     expect(await entries(() => dn.collections.create({ name: 'Plates', type: 'plate' }))).toEqual([
-      { type: 'literal_error', loc: ['body', 'type'], msg: "Input should be 'face'", input: 'plate', ctx: { expected: "'face'" } },
+      { type: 'literal_error', loc: ['body', 'type'], msg: "Input should be 'face' or 'text'", input: 'plate', ctx: { expected: "'face' or 'text'" } },
     ]);
     expect(await entries(() => dn.collections.create({ name: '' }))).toEqual([
       { type: 'string_too_short', loc: ['body', 'name'], msg: 'String should have at least 1 character', input: '', ctx: { min_length: 1 } },
@@ -216,7 +216,7 @@ describe('collections: local checks', () => {
     ]);
     // An object is never echoed; a number is, as it is.
     expect(await entries(() => dn.collections.create({ name: 'Plates', type: { kind: 'face' } as never }))).toEqual([
-      { type: 'literal_error', loc: ['body', 'type'], msg: "Input should be 'face'", input: null, ctx: { expected: "'face'" } },
+      { type: 'literal_error', loc: ['body', 'type'], msg: "Input should be 'face' or 'text'", input: null, ctx: { expected: "'face' or 'text'" } },
     ]);
     expect(await entries(() => dn.collections.create({ name: 7 as never }))).toEqual([
       { type: 'string_type', loc: ['body', 'name'], msg: 'Input should be a valid string', input: 7 },
