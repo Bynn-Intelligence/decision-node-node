@@ -351,6 +351,18 @@ describe('reading documents', () => {
     ]);
     await expect(dn.collections.listChunks(COL, ITEM, { limit: 101 })).rejects.toBeInstanceOf(BadRequestError);
   });
+
+  it('searches and sorts the items list, checking q and sort before sending', async () => {
+    const page = { items: [], offset: 0, limit: 20, total: 0, next_offset: null, q: 'claims policy', sort: 'title' };
+    const { dn, calls } = client([{ status: 200, body: page }]);
+    expect(await dn.collections.listItems(COL, { q: 'claims policy', sort: 'title' })).toEqual(page);
+    expect(sent(calls[0]!).path).toBe(`/v1/collections/${COL}/items?q=claims%20policy&sort=title`);
+    expect(((await refusal(() => dn.collections.listItems(COL, { q: '' }))) as BadRequestError).message).toBe('Query parameter q must be 1 to 200 characters.');
+    expect(((await refusal(() => dn.collections.listItems(COL, { sort: 'Newest\u0001' }))) as BadRequestError).message).toBe(
+      'Query parameter sort must be newest, oldest or title, got Newest\\u{1}.',
+    );
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe('waitUntilReady', () => {

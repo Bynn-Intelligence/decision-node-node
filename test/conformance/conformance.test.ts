@@ -858,6 +858,8 @@ async function invoke(client: DecisionNode, call: Json, ctx: Json = {}): Promise
       if ('limit' in args) p.limit = args.limit;
       if ('reference' in args) p.reference = decode(args.reference, ctx);
       if ('reference_prefix' in args) p.reference_prefix = decode(args.reference_prefix, ctx);
+      if ('q' in args) p.q = decode(args.q, ctx);
+      if ('sort' in args) p.sort = decode(args.sort, ctx);
       return client.collections.listItems(decode(args.collection_id, ctx), p);
     }
     case 'collections.delete_item':

@@ -716,7 +716,7 @@ for (const p of found.passages) console.log(p.title, p.score, p.text);
 | `replaceDocument(id, itemId, { ... })` | `PUT`: the document replaced whole; a new text, format or title is a new version, the old one serving until the new one is ready; the same text again changes nothing and is free |
 | `updateItem(id, itemId, { reference, label, metadata, pinned, pinRank, title })` | `PATCH` with only the fields given: applied at once, never re-embedded or billed; a new `title` is a new version |
 | `getItem(id, itemId, { includeText })` | one document, with its stored text when asked |
-| `listItems(id, { offset, limit, reference, reference_prefix })` | one page of documents, never their text |
+| `listItems(id, { offset, limit, reference, reference_prefix, q, sort })` | one page of documents, never their text; `q` (1 to 200 characters) finds documents whose title, file name or reference holds it, ignoring case, and `sort` is `newest` (the default), `oldest` or `title`; the page echoes both |
 | `listChunks(id, itemId, { offset, limit })` | one page of a document's chunks: `chunk`, `heading`, `byte_start`, `byte_end`, `page_start`, `page_end`, `tokens`, `text` |
 | `deleteItem(id, itemId)` | the document, its text and its chunks deleted at once |
 | `deleteFailed(id)` | `DELETE /v1/collections/{id}/items?status=failed`: every failed document deleted, answering `{ deleted: n }`; a failed document otherwise stays visible with its `error` and counts toward nothing |
@@ -724,7 +724,7 @@ for (const p of found.passages) console.log(p.title, p.score, p.text);
 
 `addDocument`, `replaceDocument` and `updateItem` send an `Idempotency-Key`, a new UUID per call and the same on every attempt of it, so the API adds and bills a document once however often the call is tried. When a file this package uploaded is refused as expired, consumed, not found or incomplete, it is uploaded once more and the call sent again with a new key; an upload id you gave is never uploaded again.
 
-Checked before sending, as the API checks them: a `title` of 1 to 200 characters (required for a text and for a text file without a name), a text that is not empty, `format` `markdown` or `text`, a `scopeKey` of 1 to 40 of `a-z`, `0-9` and `_`, a `pinRank` from 0 to 1,000, `reference`, `label` and `metadata` as for faces, a file of at most 50 MB that is not empty and of a supported type, and a page's `offset` and `limit`.
+Checked before sending, as the API checks them: a `title` of 1 to 200 characters (required for a text and for a text file without a name), a text that is not empty, `format` `markdown` or `text`, a `scopeKey` of 1 to 40 of `a-z`, `0-9` and `_`, a `pinRank` from 0 to 1,000, `reference`, `label` and `metadata` as for faces, a file of at most 50 MB that is not empty and of a supported type, a page's `offset` and `limit`, and `listItems`' `q` and `sort`.
 
 | Supported | |
 |---|---|

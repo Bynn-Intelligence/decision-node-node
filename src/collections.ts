@@ -220,6 +220,9 @@ export interface WaitParams {
   signal?: AbortSignal;
 }
 
+/** The order of a knowledge base's items list: `newest` (the default), `oldest` or `title`. */
+export type ItemSort = 'newest' | 'oldest' | 'title' | (string & {});
+
 /** One page of a collection's items. */
 export interface CollectionItemPage {
   items: CollectionItem[];
@@ -234,6 +237,10 @@ export interface CollectionItemPage {
   reference?: string | null;
   /** The `reference_prefix` the page was filtered by, or `null`. */
   reference_prefix?: string | null;
+  /** A knowledge base's page: the `q` it was searched by, or `null`. */
+  q?: string | null;
+  /** A knowledge base's page: its order. */
+  sort?: string;
   [field: string]: unknown;
 }
 
@@ -260,6 +267,8 @@ const SCOPE_KEY = new RegExp(SCOPE_KEY_PATTERN);
 const MAX_TITLE_CHARS = 200;
 const MAX_PIN_RANK = 1000;
 const FORMATS = new Set(['markdown', 'text']);
+const MAX_ITEMS_Q_CHARS = 200;
+const ITEM_SORTS = new Set(['newest', 'oldest', 'title']);
 const MAX_REFERENCE_CHARS = 64;
 const MAX_LABEL_CHARS = 128;
 // Checked after the length, so an empty reference is too short, not off the pattern.
@@ -586,14 +595,17 @@ export class Collections {
   /**
    * One page of a collection's items (`GET /v1/collections/{id}/items`). `offset`,
    * `limit`, and the filters `reference` (exact) or `reference_prefix` (never both)
-   * are sent only when given.
+   * are sent only when given. A knowledge base's list also takes `q` (1 to 200
+   * characters, matched case-insensitively against a document's title, file name
+   * or reference) and `sort` (`newest`, the default, `oldest` or `title`), each
+   * sent only when given and echoed in the page.
    */
   async listItems(
     collectionId: string,
-    params: { offset?: number; limit?: number; reference?: string; reference_prefix?: string } = {},
+    params: { offset?: number; limit?: number; reference?: string; reference_prefix?: string; q?: string; sort?: ItemSort } = {},
     options: { signal?: AbortSignal } = {},
   ): Promise<CollectionItemPage> {
-    const { offset, limit, reference, reference_prefix: referencePrefix } = params;
+    const { offset, limit, reference, reference_prefix: referencePrefix, q, sort } = params;
     const query = pageQuery(offset, limit);
     if (given(reference) && given(referencePrefix)) {
       throw localError(BadRequestError, 'Send query parameter reference or reference_prefix, not both.');
@@ -605,6 +617,17 @@ export class Collections {
       if (!given(value)) continue;
       checkReferenceQuery(name, value);
       query.push(`${name}=${encodeURIComponent(value as string)}`);
+    }
+    if (given(q)) {
+      const n = typeof q === 'string' ? [...q].length : 0;
+      if (n < 1 || n > MAX_ITEMS_Q_CHARS) throw localError(BadRequestError, `Query parameter q must be 1 to ${MAX_ITEMS_Q_CHARS} characters.`);
+      query.push(`q=${encodeURIComponent(q as string)}`);
+    }
+    if (given(sort)) {
+      if (!ITEM_SORTS.has(sort as string)) {
+        throw localError(BadRequestError, `Query parameter sort must be newest, oldest or title, got ${printable(String(sort), 16)}.`);
+      }
+      query.push(`sort=${sort}`);
     }
     const qs = query.join('&');
     const { body } = await this.#ctx.transport.json({

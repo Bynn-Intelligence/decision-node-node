@@ -149,6 +149,7 @@ export {
   type ItemChunkPage,
   type ItemFile,
   type ItemProgress,
+  type ItemSort,
   type PinnedLoad,
   type SearchParams,
   type StatusCounts,
