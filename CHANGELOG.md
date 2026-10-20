@@ -15,7 +15,7 @@ Implements version 1.4 of the DecisionNode SDK specification (`SPEC_VERSION` is 
 - Checked before sending, with the API's 422 entries: a collection `type` other than `face` or `text`, a `scopeKey` off its pattern, a missing or out-of-range `title`, an empty text, a `format` other than `markdown` or `text`, a `pinRank` outside 0 to 1,000, and a document's `reference`, `label` and `metadata`; a file over 50 MB, an empty file and a file of an unsupported type throw the presign's `BadRequestError`, nothing sent.
 - A 529 whose `details.reason` is `ingestion_delayed` is thrown at once and never retried; the other knowledge 529s are retried as every 529.
 - A document's storage PUT waits up to `DEFAULT_DOCUMENT_UPLOAD_TIMEOUT` (120 s) per attempt unless `uploadTimeout` is set.
-- Passes conformance suite 1.24.
+- Passes conformance suite 1.25.
 
 ## 0.3.0 (2026-10-19)
 
