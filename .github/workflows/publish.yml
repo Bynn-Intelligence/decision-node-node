@@ -2,8 +2,9 @@
 # The one other change from the copied workflow: the packed files are checked
 # for names that must not ship before anything is pushed or published.
 #
-# Auto-release @decisionnode/sdk on every push to main: bump the patch, keep
-# the in-code version string (src/version.ts) in step, run the checks,
+# Auto-release @decisionnode/sdk on every push to main: bump the patch (or
+# publish a minor or major version set by hand, which npm does not have yet),
+# keep the in-code version string (src/version.ts) in step, run the checks,
 # publish to npm with provenance, push the bump commit and tag back to main,
 # and cut the GitHub release. The push back uses the default GITHUB_TOKEN,
 # which does not retrigger this workflow, and the bump commit carries
@@ -55,9 +56,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           CURRENT=$(node -p "require('./package.json').version")
-          NEW=$(npm version patch --no-git-tag-version)
-          NEW=${NEW#v}
-          sed -i "s/export const VERSION = '${CURRENT}'/export const VERSION = '${NEW}'/" src/version.ts
+          # A version set by hand in package.json (a minor or major release) that
+          # npm does not have yet is published as it is; otherwise the patch is bumped.
+          if [ -n "$(npm view "@decisionnode/sdk@${CURRENT}" version 2>/dev/null)" ]; then
+            NEW=$(npm version patch --no-git-tag-version)
+            NEW=${NEW#v}
+            sed -i "s/export const VERSION = '${CURRENT}'/export const VERSION = '${NEW}'/" src/version.ts
+          else
+            NEW=${CURRENT}
+          fi
+          grep -q "export const VERSION = '${NEW}'" src/version.ts
           echo "version=${NEW}" >> "$GITHUB_OUTPUT"
 
       - run: npm run typecheck
@@ -76,7 +84,7 @@ jobs:
 
       - run: |
           git add package.json package-lock.json src/version.ts
-          git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
+          git diff --cached --quiet || git commit -m "Release v${{ steps.bump.outputs.version }} [skip publish]"
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin HEAD:main "v${{ steps.bump.outputs.version }}"
 
