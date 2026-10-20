@@ -1,6 +1,6 @@
 {
   "name": "@decisionnode/sdk",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "TypeScript and JavaScript client for the DecisionNode decision engine API: calibrated truth, choice and score answers with typed results.",
   "license": "MIT",
   "author": "Bynn Intelligence, Inc.",

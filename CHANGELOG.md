@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-10-20)
 
 Implements version 1.4 of the DecisionNode SDK specification (`SPEC_VERSION` is `"1.4"`): knowledge.
 
