@@ -387,6 +387,20 @@ export type AnswersFor<Q> = { -readonly [K in keyof Q]: AnswerFor<Q[K]> };
 /** Token counts. A count the response did not carry is `null`, never 0. */
 export interface Usage {
   inputTokens: number | null;
+  /**
+   * The share of `inputTokens` that came from images, from the
+   * `x-decisionnode-image-tokens` header, as sent: never added to or taken
+   * from another count. `null` for a request without images (the server sends
+   * the header only when the share is above 0), and when the header is not a
+   * whole number from 0 to 2^31 - 1.
+   */
+  imageTokens: number | null;
+  /**
+   * The share of `inputTokens` that came from videos, from the
+   * `x-decisionnode-video-tokens` header, read as `imageTokens` is. `null` for
+   * a request without videos.
+   */
+  videoTokens: number | null;
   outputTokens: number | null;
   /** For a request with videos: the frames the server read; `null` otherwise. */
   videoFrames: number | null;
@@ -418,6 +432,21 @@ export interface Cost {
 
 function count(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** The largest token count a header may carry, 2^31 - 1. */
+const MAX_HEADER_TOKENS = 2147483647;
+
+/**
+ * A token count from a header: digits only after trimming spaces, from 0 to
+ * 2^31 - 1. Anything else (absent, empty, a sign, a fraction, too large) is `null`.
+ */
+function tokenHeader(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  const digits = value.trim();
+  if (!/^[0-9]+$/.test(digits)) return null;
+  const n = Number(digits);
+  return n <= MAX_HEADER_TOKENS ? n : null;
 }
 
 function parseCost(value: unknown): Cost | null {
@@ -484,6 +513,8 @@ export class Decision<A extends Record<string, Answer> = Record<string, Answer>>
     const usage = (body.usage && typeof body.usage === 'object' ? body.usage : {}) as Record<string, unknown>;
     this.usage = {
       inputTokens: count(usage.input_tokens),
+      imageTokens: tokenHeader(headers['x-decisionnode-image-tokens']),
+      videoTokens: tokenHeader(headers['x-decisionnode-video-tokens']),
       outputTokens: count(usage.output_tokens),
       videoFrames: count(usage.video_frames),
       videoSeconds: count(usage.video_seconds),

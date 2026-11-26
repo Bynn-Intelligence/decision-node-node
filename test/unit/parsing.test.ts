@@ -119,6 +119,8 @@ describe('answers', () => {
     expect(d.latencyMs).toBe(12.5);
     expect(d.usage).toEqual({
       inputTokens: 3,
+      imageTokens: null,
+      videoTokens: null,
       outputTokens: 0,
       videoFrames: null,
       videoSeconds: null,
@@ -133,6 +135,8 @@ describe('answers', () => {
   it('gives null, never 0, for a missing token count', () => {
     expect(new Decision({ model: 'm', answers: {} }, {}).usage).toEqual({
       inputTokens: null,
+      imageTokens: null,
+      videoTokens: null,
       outputTokens: null,
       videoFrames: null,
       videoSeconds: null,
@@ -142,6 +146,8 @@ describe('answers', () => {
     });
     expect(new Decision({ model: 'm', answers: {}, usage: { input_tokens: 9 } }, {}).usage).toEqual({
       inputTokens: 9,
+      imageTokens: null,
+      videoTokens: null,
       outputTokens: null,
       videoFrames: null,
       videoSeconds: null,
